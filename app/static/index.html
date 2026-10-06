@@ -334,16 +334,33 @@ async function loadDevice() {
     const res = await fetch("/health");
     const h = await res.json();
     if (!res.ok) throw new Error(h.status || res.statusText);
+    if (!h.devices) {
+      // Server predates device switching: show its single device and lock the toggle.
+      devices = null;
+      const kind = String(h.device || "").startsWith("GPU") ? "gpu" : "cpu";
+      deviceRadios.forEach((r) => {
+        r.checked = r.value === kind;
+        r.disabled = true;
+        r.parentElement.title = "Restart the server to enable GPU/CPU switching";
+      });
+      el.textContent = h.device || h.backend || "unknown device";
+      el.className = kind;
+      el.title = "Restart the server to enable GPU/CPU switching";
+      fillDocs();
+      return;
+    }
     devices = h.devices;
+    el.title = "Device the next request will run on";
     deviceRadios.forEach((r) => {
-      r.disabled = !devices[r.value].available;
+      r.disabled = !devices[r.value]?.available;
       r.parentElement.title = r.disabled ? "No CUDA GPU on this server" : "";
     });
     if (!selectedDevice() || deviceRadios.find((r) => r.checked)?.disabled) {
       const saved = store.get("tts-device");
       const pick = deviceRadios.find((r) => r.value === saved && !r.disabled)
-        || deviceRadios.find((r) => r.value === h.default_device);
-      pick.checked = true;
+        || deviceRadios.find((r) => r.value === h.default_device && !r.disabled)
+        || deviceRadios.find((r) => !r.disabled);
+      if (pick) pick.checked = true;
     }
     renderDevice();
     fillDocs();
