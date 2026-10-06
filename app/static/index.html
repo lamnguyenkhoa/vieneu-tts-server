@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VieNeu TTS Test</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5b6470; --border: #d5dae1;
+    --accent: #2563eb; --accent-text: #fff; --error: #b42318; --gpu: #067647; --cpu: #b54708;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #1a1f25; --text: #e6e9ed; --muted: #9aa4b0; --border: #2e353e;
+      --accent: #3b82f6; --accent-text: #fff; --error: #f97066; --gpu: #47cd89; --cpu: #fdb022;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 32px auto; padding: 0 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  #device { font-size: 13px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  #device.gpu { color: var(--gpu); border-color: var(--gpu); }
+  #device.cpu { color: var(--cpu); border-color: var(--cpu); }
+  .toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--bg); }
+  .toggle label { flex: 1; margin: 0; font-weight: 500; text-align: center; padding: 8px 10px; cursor: pointer; }
+  .toggle label + label { border-left: 1px solid var(--border); }
+  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .toggle label:has(input:checked) { background: var(--accent); color: var(--accent-text); }
+  .toggle label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .toggle label:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+  .field-label { display: block; font-weight: 600; margin: 12px 0 4px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  label { display: block; font-weight: 600; margin: 12px 0 4px; }
+  label:first-child { margin-top: 0; }
+  input, select, textarea {
+    width: 100%; padding: 8px 10px; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  }
+  textarea { min-height: 140px; resize: vertical; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 200px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+  button {
+    padding: 8px 14px; font: inherit; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 13px; }
+  #status { margin-top: 12px; color: var(--muted); font-size: 13px; min-height: 1.5em; }
+  #status.error { color: var(--error); }
+  audio { width: 100%; margin-top: 12px; }
+  a { color: var(--accent); }
+  .docs { margin-top: 32px; }
+  .docs h2 { font-size: 18px; margin: 0 0 8px; }
+  .docs h3 { font-size: 15px; margin: 24px 0 8px; }
+  .docs p { margin: 8px 0; }
+  code { font: 13px/1.4 ui-monospace, Consolas, monospace; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; overflow-wrap: anywhere; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 600; }
+  .tabs { display: flex; gap: 4px; margin-bottom: -1px; position: relative; }
+  .tabs button { border-radius: 6px 6px 0 0; padding: 6px 12px; font-size: 13px; background: transparent; }
+  .tabs button.active { background: var(--panel); border-bottom-color: var(--panel); }
+  .code { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 0 8px 8px 8px; }
+  .code[hidden] { display: none; }
+  .code pre { margin: 0; padding: 12px; overflow-x: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+  .code .copy { position: absolute; top: 8px; right: 8px; padding: 3px 10px; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>VieNeu TTS Test</h1>
+    <span id="device" title="Device the next request will run on">checking…</span>
+  </header>
+  <div class="panel">
+    <label for="key">API key</label>
+    <input id="key" type="password" placeholder="Leave empty if TTS_API_KEY is not set" autocomplete="off">
+
+    <div class="row">
+      <div>
+        <label for="voice">Voice</label>
+        <select id="voice"><option value="">(loading…)</option></select>
+      </div>
+      <div>
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="pcm">Stream (pcm, Web Audio)</option>
+          <option value="wav">Whole file (wav)</option>
+        </select>
+      </div>
+      <div>
+        <span class="field-label" id="deviceLabel">Device</span>
+        <div class="toggle" role="radiogroup" aria-labelledby="deviceLabel">
+          <label><input type="radio" name="device" value="gpu"> GPU</label>
+          <label><input type="radio" name="device" value="cpu"> CPU</label>
+        </div>
+      </div>
+    </div>
+
+    <label for="text">Text</label>
+    <textarea id="text">Xin chào, đây là thông báo thử. Mười giờ sáng nay có cuộc họp toàn công ty, mọi người nhớ đến đúng giờ nhé.</textarea>
+    <div class="hint">Numbers, dates and times are read as written; spell them out (e.g. "mười giờ" instead of "10:00").</div>
+
+    <div class="actions">
+      <button id="speak" class="primary">Speak</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="reloadVoices">Reload voices</button>
+      <a id="download" hidden download="speech.wav">Download WAV</a>
+    </div>
+    <div id="status"></div>
+    <audio id="player" controls hidden></audio>
+  </div>
+  <section class="docs">
+    <h2>Calling the API from another service</h2>
+    <p>Base URL: <code class="base">{{BASE}}</code>. The caller must be able to reach this address. By default the server listens only on <code>127.0.0.1</code>. To accept requests from other machines, set <code>HOST=0.0.0.0</code> in <code>.env</code>, and also set <code>TTS_API_KEY</code>.</p>
+
+    <h3>Authentication</h3>
+    <p>If the server has <code>TTS_API_KEY</code> set, send it on every request as <code>Authorization: Bearer &lt;key&gt;</code>. A missing or wrong key returns 401.</p>
+
+    <h3>Endpoints</h3>
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td>GET</td><td><code>/v1/voices</code></td><td>Lists the voices. Pass a <code>data[].id</code> as <code>voice</code>. If you leave <code>voice</code> out, the server uses <code>default</code>.</td></tr>
+        <tr><td>POST</td><td><code>/v1/audio/speech</code></td><td>Turns text into audio.</td></tr>
+        <tr><td>GET</td><td><code>/health</code></td><td>Status and device (no key needed). Returns 503 while the model loads.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Request body for <code>POST /v1/audio/speech</code></h3>
+    <table>
+      <thead><tr><th>Field</th><th>Required</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>input</code></td><td>yes</td><td>The text to read, up to 20,000 characters.</td></tr>
+        <tr><td><code>voice</code></td><td>no</td><td>A voice id from <code>/v1/voices</code>. Leave it out to use the default voice.</td></tr>
+        <tr><td><code>response_format</code></td><td>no</td><td><code>"wav"</code> (default) returns one complete file. <code>"pcm"</code> streams raw audio as it is generated.</td></tr>
+        <tr><td><code>device</code></td><td>no</td><td><code>"gpu"</code> or <code>"cpu"</code>. Leave it out to use the server default (<code>TTS_DEFAULT_DEVICE</code>). The first request for a device that is not loaded yet waits while it loads. The response header <code>X-Device</code> says which device ran the request.</td></tr>
+        <tr><td><code>model</code></td><td>no</td><td>Accepted for OpenAI compatibility (<code>"vieneu-v3-turbo"</code>).</td></tr>
+      </tbody>
+    </table>
+    <p>The server reads text exactly as written. It does not convert numbers, dates, times or licence plates to words, so write them out (for example "mười giờ" instead of "10:00").</p>
+
+    <h3>Which method to use</h3>
+    <p><strong>File (<code>wav</code>):</strong> the response arrives after the whole text has been synthesized, as a normal WAV file (48 kHz, mono, 16-bit). Use it when you need to save or send a file.</p>
+    <p><strong>Stream (<code>pcm</code>):</strong> audio starts arriving after about 0.1 s and keeps coming while it is generated. Use it to play speech with the least delay. Both methods take the same total time; only the wait for the first sound differs.</p>
+    <p>The stream is raw PCM: 16-bit signed little-endian, mono. The sample rate is in the <code>X-Sample-Rate</code> response header (48000). The stream has no file header, so to save it as a file, add a 44-byte WAV header with that rate. A chunk can end halfway through a 2-byte sample; if so, carry the odd byte into the next chunk.</p>
+
+    <h3>File method</h3>
+    <div class="tabs" data-group="file">
+      <button data-tab="curl" class="active">curl</button><button data-tab="py">Python</button><button data-tab="js">JavaScript</button>
+    </div>
+    <div class="code" data-group="file" data-tab="curl"><button class="copy">Copy</button><pre>curl -X POST {{BASE}}/v1/audio/speech \
+  -H "Authorization: Bearer {{KEY}}" \
+  -H "Content-Type: application/json" \
+  -d '{"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "wav", "device": "{{DEVICE}}"}' \
+  --output speech.wav</pre></div>
+    <div class="code" data-group="file" data-tab="py" hidden><button class="copy">Copy</button><pre>import requests
+
+res = requests.post(
+    "{{BASE}}/v1/audio/speech",
+    headers={"Authorization": "Bearer {{KEY}}"},
+    json={"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "wav", "device": "{{DEVICE}}"},
+    timeout=120,
+)
+if not res.ok:
+    raise RuntimeError(res.json()["error"]["message"])
+with open("speech.wav", "wb") as f:
+    f.write(res.content)</pre></div>
+    <div class="code" data-group="file" data-tab="js" hidden><button class="copy">Copy</button><pre>// Node 18+ or browser
+const res = await fetch("{{BASE}}/v1/audio/speech", {
+  method: "POST",
+  headers: { "Authorization": "Bearer {{KEY}}", "Content-Type": "application/json" },
+  body: JSON.stringify({ voice: "{{VOICE}}", input: "Xin chào, đây là thông báo thử.", response_format: "wav", device: "{{DEVICE}}" }),
+});
+if (!res.ok) throw new Error((await res.json()).error.message);
+const wav = new Uint8Array(await res.arrayBuffer());
+// Node:    (await import("node:fs")).writeFileSync("speech.wav", wav);
+// Browser: new Audio(URL.createObjectURL(new Blob([wav], { type: "audio/wav" }))).play();</pre></div>
+
+    <h3>Stream method</h3>
+    <div class="tabs" data-group="stream">
+      <button data-tab="curl" class="active">curl</button><button data-tab="py">Python</button><button data-tab="js">Browser</button>
+    </div>
+    <div class="code" data-group="stream" data-tab="curl"><button class="copy">Copy</button><pre># Raw PCM to a file (-N turns off buffering so bytes arrive as they are generated)
+curl -N -X POST {{BASE}}/v1/audio/speech \
+  -H "Authorization: Bearer {{KEY}}" \
+  -H "Content-Type: application/json" \
+  -d '{"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "pcm", "device": "{{DEVICE}}"}' \
+  --output speech.pcm
+
+# Or play it live with ffplay (part of ffmpeg): replace the last line with
+#   --output - | ffplay -f s16le -ar 48000 -ch_layout mono -nodisp -autoexit -</pre></div>
+    <div class="code" data-group="stream" data-tab="py" hidden><button class="copy">Copy</button><pre>import wave
+import requests
+
+with requests.post(
+    "{{BASE}}/v1/audio/speech",
+    headers={"Authorization": "Bearer {{KEY}}"},
+    json={"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "pcm", "device": "{{DEVICE}}"},
+    stream=True,
+    timeout=120,
+) as res:
+    if not res.ok:
+        raise RuntimeError(res.json()["error"]["message"])
+    rate = int(res.headers.get("X-Sample-Rate", 48000))
+    with wave.open("speech.wav", "wb") as out:  # wave writes the WAV header for you
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        for chunk in res.iter_content(chunk_size=4096):
+            # Play or forward each chunk here as it arrives (sounddevice, a websocket...).
+            out.writeframes(chunk)</pre></div>
+    <div class="code" data-group="stream" data-tab="js" hidden><button class="copy">Copy</button><pre>// Plays the stream as it arrives with the Web Audio API (no library).
+// A page on another domain needs that domain in ALLOWED_ORIGINS on this server.
+async function streamSpeech(input, voice) {
+  const res = await fetch("{{BASE}}/v1/audio/speech", {
+    method: "POST",
+    headers: { "Authorization": "Bearer {{KEY}}", "Content-Type": "application/json" },
+    body: JSON.stringify({ input, voice, response_format: "pcm", device: "{{DEVICE}}" }),
+  });
+  if (!res.ok) throw new Error((await res.json()).error.message);
+  const rate = Number(res.headers.get("X-Sample-Rate")) || 48000;
+  const ctx = new AudioContext();
+  const reader = res.body.getReader();
+  let nextTime = 0, carry = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    let bytes = value;
+    if (carry !== null) { bytes = new Uint8Array([carry, ...value]); carry = null; }
+    if (bytes.length % 2) { carry = bytes[bytes.length - 1]; bytes = bytes.subarray(0, -1); }
+    if (!bytes.length) continue;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const buffer = ctx.createBuffer(1, bytes.length / 2, rate);
+    const ch = buffer.getChannelData(0);
+    for (let i = 0; i &lt; ch.length; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ctx.destination);
+    if (nextTime &lt; ctx.currentTime) nextTime = ctx.currentTime + 0.12;  // small buffer against gaps
+    src.start(nextTime);
+    nextTime += buffer.duration;
+  }
+  return ctx;  // ctx.close() stops playback; reader.cancel() also tells the server to stop generating
+}</pre></div>
+
+    <h3>Errors</h3>
+    <p>Errors are JSON in OpenAI's format: <code>{"error": {"message": "...", "type": "invalid_request_error", "code": 400}}</code>.</p>
+    <table>
+      <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>400</td><td>Bad request: empty <code>input</code>, unknown <code>voice</code>, or unsupported <code>response_format</code>.</td></tr>
+        <tr><td>401</td><td>Missing or wrong API key.</td></tr>
+        <tr><td>429</td><td>Server busy. Retry after the number of seconds in the <code>Retry-After</code> header.</td></tr>
+        <tr><td>503</td><td>Model still loading.</td></tr>
+      </tbody>
+    </table>
+    <p class="hint">The code samples fill in this page's address, the voice and device selected above, and the key you typed (shown as <code>&lt;your-key&gt;</code> when the key box is empty).</p>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+
+$("key").value = store.get("tts-key") || "";
+$("mode").value = store.get("tts-mode") || "pcm";
+$("key").addEventListener("change", () => { store.set("tts-key", $("key").value); loadVoices(); });
+$("mode").addEventListener("change", () => store.set("tts-mode", $("mode").value));
+$("voice").addEventListener("change", () => store.set("tts-voice", $("voice").value));
+
+function headers() {
+  const h = { "Content-Type": "application/json" };
+  const key = $("key").value.trim();
+  if (key) h["Authorization"] = `Bearer ${key}`;
+  return h;
+}
+
+function setStatus(msg, isError = false) {
+  $("status").textContent = msg;
+  $("status").classList.toggle("error", isError);
+}
+
+async function errorMessage(res) {
+  try { return (await res.json()).error?.message || res.statusText; } catch { return res.statusText; }
+}
+
+async function loadVoices() {
+  try {
+    const res = await fetch("/v1/voices", { headers: headers() });
+    if (!res.ok) throw new Error(await errorMessage(res));
+    const { default: def, data } = await res.json();
+    const saved = store.get("tts-voice");
+    $("voice").innerHTML = "";
+    for (const v of data) {
+      const opt = new Option(`${v.name}${v.description ? " — " + v.description : ""}`, v.id);
+      $("voice").add(opt);
+    }
+    $("voice").value = data.some((v) => v.id === saved) ? saved : def;
+    setStatus(`${data.length} voices loaded.`);
+    fillDocs();
+  } catch (e) {
+    $("voice").innerHTML = '<option value="">(default)</option>';
+    setStatus(`Could not load voices: ${e.message}`, true);
+  }
+}
+
+// ── device (GPU / CPU) ──────────────────────────────────────────────────────
+let devices = null;  // /health "devices": {gpu: {available, state, name}, cpu: {...}}
+const deviceRadios = [...document.querySelectorAll('input[name="device"]')];
+const selectedDevice = () => deviceRadios.find((r) => r.checked)?.value;
+
+function renderDevice() {
+  const el = $("device");
+  const kind = selectedDevice();
+  const d = devices?.[kind];
+  if (!d) return;
+  el.textContent = d.state === "loaded" ? d.name
+    : d.state === "loading" ? `${d.name}: loading…`
+    : `${d.name}: loads on first use`;
+  el.className = kind;
+}
+
+async function loadDevice() {
+  const el = $("device");
+  try {
+    const res = await fetch("/health");
+    const h = await res.json();
+    if (!res.ok) throw new Error(h.status || res.statusText);
+    devices = h.devices;
+    deviceRadios.forEach((r) => {
+      r.disabled = !devices[r.value].available;
+      r.parentElement.title = r.disabled ? "No CUDA GPU on this server" : "";
+    });
+    if (!selectedDevice() || deviceRadios.find((r) => r.checked)?.disabled) {
+      const saved = store.get("tts-device");
+      const pick = deviceRadios.find((r) => r.value === saved && !r.disabled)
+        || deviceRadios.find((r) => r.value === h.default_device);
+      pick.checked = true;
+    }
+    renderDevice();
+    fillDocs();
+  } catch (e) {
+    el.textContent = `server: ${e.message}`;
+    el.className = "";
+  }
+}
+
+deviceRadios.forEach((r) => r.addEventListener("change", () => {
+  store.set("tts-device", selectedDevice());
+  renderDevice();
+  fillDocs();
+}));
+
+// ── playback ────────────────────────────────────────────────────────────────
+let ctx = null, reader = null, controller = null, wavUrl = null;
+let busy = false;     // a request is in flight
+let playing = false;  // audio is still audible (Web Audio schedule or <audio> element)
+
+function updateButtons() {
+  $("speak").disabled = busy;
+  $("stop").disabled = !busy && !playing;
+}
+
+function wavFromPcm(chunks, rate) {
+  const len = chunks.reduce((n, c) => n + c.length, 0);
+  const buf = new ArrayBuffer(44 + len), v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((ch, i) => v.setUint8(o + i, ch.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + len, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, len, true);
+  let off = 44;
+  for (const c of chunks) { new Uint8Array(buf, off, c.length).set(c); off += c.length; }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function showWav(blob) {
+  if (wavUrl) URL.revokeObjectURL(wavUrl);
+  wavUrl = URL.createObjectURL(blob);
+  $("download").href = wavUrl;
+  $("download").hidden = false;
+  $("player").src = wavUrl;
+  $("player").hidden = false;
+}
+
+async function stop() {
+  const c = ctx, r = reader;
+  controller?.abort();
+  ctx = reader = controller = null;
+  playing = false;
+  updateButtons();
+  try { await r?.cancel(); } catch {}
+  await c?.close().catch(() => {});
+  $("player").pause();
+}
+
+$("player").addEventListener("play", () => { playing = true; updateButtons(); });
+$("player").addEventListener("pause", () => { playing = !!ctx; updateButtons(); });
+$("player").addEventListener("ended", () => { playing = !!ctx; updateButtons(); });
+
+async function speak() {
+  const input = $("text").value.trim();
+  if (!input) { setStatus("Enter some text.", true); return; }
+  await stop();
+  busy = true;
+  updateButtons();
+  $("download").hidden = true;
+  $("player").hidden = true;
+
+  const fmt = $("mode").value;
+  const t0 = performance.now();
+  const ms = () => Math.round(performance.now() - t0);
+  controller = new AbortController();
+  const device = selectedDevice();
+  const dev = devices?.[device];
+  setStatus(dev && dev.state !== "loaded"
+    ? `Loading the ${device.toUpperCase()} model (first use; can take a minute, longer if it must download)…`
+    : `Generating on ${device?.toUpperCase() ?? "default device"}…`);
+  if (dev && dev.state !== "loaded") { dev.state = "loading"; renderDevice(); }
+  try {
+    const res = await fetch("/v1/audio/speech", {
+      method: "POST", headers: headers(), signal: controller.signal,
+      body: JSON.stringify({ model: "vieneu-v3-turbo", voice: $("voice").value || undefined, input, response_format: fmt, device }),
+    });
+    loadDevice();  // refresh: the device may have just finished loading
+    if (!res.ok) throw new Error(await errorMessage(res));
+    const ranOn = (res.headers.get("X-Device") || device || "").toUpperCase();
+
+    if (fmt === "wav") {
+      const blob = await res.blob();
+      setStatus(`${ranOn}: got ${(blob.size / 1024).toFixed(0)} KB WAV in ${ms()} ms.`);
+      showWav(blob);
+      await $("player").play();
+      return;
+    }
+
+    const rate = Number(res.headers.get("X-Sample-Rate")) || 48000;
+    const myCtx = ctx = new AudioContext();
+    reader = res.body.getReader();
+    playing = true;
+    let lastSrc = null;
+    const kept = [];
+    let nextTime = 0, carry = null, first = null, bytesIn = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || ctx !== myCtx) break;  // finished, or Stop pressed
+      let bytes = value;
+      if (carry !== null) { bytes = new Uint8Array([carry, ...value]); carry = null; }
+      if (bytes.length % 2) { carry = bytes[bytes.length - 1]; bytes = bytes.subarray(0, -1); }
+      if (!bytes.length) continue;
+      kept.push(bytes.slice());
+      bytesIn += bytes.length;
+      if (first === null) first = ms();
+
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const buffer = myCtx.createBuffer(1, bytes.length / 2, rate);
+      const ch = buffer.getChannelData(0);
+      for (let i = 0; i < ch.length; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+      const src = myCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(myCtx.destination);
+      if (nextTime < myCtx.currentTime) nextTime = myCtx.currentTime + 0.12;
+      src.start(nextTime);
+      lastSrc = src;
+      nextTime += buffer.duration;
+      setStatus(`${ranOn}: streaming… first audio after ${first} ms, ${(bytesIn / 2 / rate).toFixed(1)} s received.`);
+    }
+    if (ctx !== myCtx) { setStatus("Stopped."); return; }
+    // The server is done but scheduled audio keeps playing; free Stop only when it ends.
+    const finish = () => {
+      if (ctx !== myCtx) return;  // already stopped or replaced by a newer request
+      myCtx.close().catch(() => {});
+      ctx = null;
+      playing = false;
+      updateButtons();
+    };
+    if (lastSrc) lastSrc.onended = finish; else finish();
+    setStatus(`${ranOn} done: first audio after ${first ?? "-"} ms, total ${ms()} ms, ${(bytesIn / 2 / rate).toFixed(1)} s of audio.`);
+    if (kept.length) {
+      const blob = wavFromPcm(kept, rate);
+      if (wavUrl) URL.revokeObjectURL(wavUrl);
+      wavUrl = URL.createObjectURL(blob);
+      $("download").href = wavUrl;
+      $("download").hidden = false;
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") { setStatus(`Error: ${e.message}`, true); await stop(); loadDevice(); }
+    else setStatus("Stopped.");
+  } finally {
+    busy = false;
+    updateButtons();
+  }
+}
+
+$("speak").addEventListener("click", speak);
+$("stop").addEventListener("click", stop);
+$("reloadVoices").addEventListener("click", loadVoices);
+$("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) speak(); });
+// ── API docs: fill code samples, tabs, copy ─────────────────────────────────
+document.querySelectorAll(".docs pre, .docs .base").forEach((el) => { el.dataset.tpl = el.textContent; });
+
+function fillDocs() {
+  const vals = {
+    BASE: location.origin,
+    KEY: $("key").value.trim() || "<your-key>",
+    VOICE: $("voice").value || "Mai Anh",
+    DEVICE: selectedDevice() || "gpu",
+  };
+  document.querySelectorAll("[data-tpl]").forEach((el) => {
+    el.textContent = el.dataset.tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => vals[k] ?? "");
+  });
+}
+$("key").addEventListener("input", fillDocs);
+$("voice").addEventListener("change", fillDocs);
+
+document.querySelectorAll(".tabs").forEach((tabs) => {
+  tabs.addEventListener("click", (e) => {
+    const tab = e.target.dataset.tab;
+    if (!tab) return;
+    tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === e.target));
+    document.querySelectorAll(`.code[data-group="${tabs.dataset.group}"]`).forEach((c) => {
+      c.hidden = c.dataset.tab !== tab;
+    });
+  });
+});
+
+document.querySelectorAll(".code .copy").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(btn.nextElementSibling.textContent);
+      btn.textContent = "Copied";
+    } catch {
+      btn.textContent = "Copy failed";
+    }
+    setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+  });
+});
+
+fillDocs();
+loadDevice();
+loadVoices();
+</script>
+</body>
+</html>

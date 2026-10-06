@@ -1,0 +1,28 @@
+[project]
+name = "vieneu-tts-server"
+version = "0.1.0"
+description = "Text-to-speech HTTP server on VieNeu-TTS v3 Turbo (OpenAI-style /v1/audio/speech)"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "vieneu[cuda]==3.8.3",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "torch==2.8.0",
+    "torchaudio==2.8.0",
+    # 1.25+ rejects ONNX external-data files that resolve to another Hugging Face cache blob folder,
+    # which breaks the CPU model; upstream VieNeu-TTS locks 1.24.4.
+    "onnxruntime>=1.24,<1.25",
+]
+
+[tool.uv]
+package = false
+
+# vieneu[cuda] pins torch/torchaudio 2.8.0; pull the CUDA 12.8 wheels (needed for RTX 50xx).
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }]
+torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }]
