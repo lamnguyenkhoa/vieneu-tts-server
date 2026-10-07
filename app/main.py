@@ -28,6 +28,7 @@ import numpy as np
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -332,10 +333,14 @@ def models():
     }]}
 
 
+STATIC_DIR = Path(__file__).parent / "static"
+# Browser test page and its assets; the page asks for the API key itself, so it needs no auth.
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
 @app.get("/", include_in_schema=False)
 def test_page():
-    """Browser test page; it asks for the API key itself, so it needs no auth."""
-    return FileResponse(Path(__file__).parent / "static" / "index.html")
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/health")

@@ -1,0 +1,64 @@
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1b1f24; --muted: #5b6470; --border: #d5dae1;
+  --accent: #2563eb; --accent-text: #fff; --error: #b42318; --gpu: #067647; --cpu: #b54708;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #1a1f25; --text: #e6e9ed; --muted: #9aa4b0; --border: #2e353e;
+    --accent: #3b82f6; --accent-text: #fff; --error: #f97066; --gpu: #47cd89; --cpu: #fdb022;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 720px; margin: 32px auto; padding: 0 16px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; }
+h1 { font-size: 20px; margin: 0; }
+#device { font-size: 13px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+#device.gpu { color: var(--gpu); border-color: var(--gpu); }
+#device.cpu { color: var(--cpu); border-color: var(--cpu); }
+.toggle { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--bg); }
+.toggle label { flex: 1; margin: 0; font-weight: 500; text-align: center; padding: 8px 10px; cursor: pointer; }
+.toggle label + label { border-left: 1px solid var(--border); }
+.toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.toggle label:has(input:checked) { background: var(--accent); color: var(--accent-text); }
+.toggle label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.toggle label:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+.field-label { display: block; font-weight: 600; margin: 12px 0 4px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+label { display: block; font-weight: 600; margin: 12px 0 4px; }
+label:first-child { margin-top: 0; }
+input, select, textarea {
+  width: 100%; padding: 8px 10px; font: inherit; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+}
+textarea { min-height: 140px; resize: vertical; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; }
+.row > div { flex: 1 1 200px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+button {
+  padding: 8px 14px; font: inherit; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button:disabled { opacity: .5; cursor: default; }
+.hint { color: var(--muted); font-size: 13px; }
+#status { margin-top: 12px; color: var(--muted); font-size: 13px; min-height: 1.5em; }
+#status.error { color: var(--error); }
+audio { width: 100%; margin-top: 12px; }
+a { color: var(--accent); }
+.docs { margin-top: 32px; }
+.docs h2 { font-size: 18px; margin: 0 0 8px; }
+.docs h3 { font-size: 15px; margin: 24px 0 8px; }
+.docs p { margin: 8px 0; }
+code { font: 13px/1.4 ui-monospace, Consolas, monospace; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px; overflow-wrap: anywhere; }
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+tr:last-child td { border-bottom: 0; }
+th { color: var(--muted); font-weight: 600; }
+.tabs { display: flex; gap: 4px; margin-bottom: -1px; position: relative; }
+.tabs button { border-radius: 6px 6px 0 0; padding: 6px 12px; font-size: 13px; background: transparent; }
+.tabs button.active { background: var(--panel); border-bottom-color: var(--panel); }
+.code { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 0 8px 8px 8px; }
+.code[hidden] { display: none; }
+.code pre { margin: 0; padding: 12px; overflow-x: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+.code .copy { position: absolute; top: 8px; right: 8px; padding: 3px 10px; font-size: 12px; }
