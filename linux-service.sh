@@ -1,4 +1,4 @@
-sudo tee /etc/systemd/system/vieneu-tts.service > /dev/null <<'EOF'
+sudo tee /etc/systemd/system/vieneu-tts-server.service > /dev/null <<'EOF'
 [Unit]
 Description=VieNeu TTS Server
 After=network-online.target
