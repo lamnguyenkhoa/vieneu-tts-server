@@ -629,13 +629,24 @@ def models():
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class _RevalidatedStatic(StaticFiles):
+    """Static files the browser must revalidate (cheap 304 via ETag), so edits show up on a normal reload."""
+
+    async def get_response(self, path, scope):
+        res = await super().get_response(path, scope)
+        res.headers["Cache-Control"] = "no-cache"
+        return res
+
+
 # Browser test page and its assets; the page asks for the API key itself, so it needs no auth.
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", _RevalidatedStatic(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", include_in_schema=False)
 def test_page():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/health")

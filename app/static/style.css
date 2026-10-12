@@ -42,8 +42,21 @@ button {
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 button:disabled { opacity: .5; cursor: default; }
 .hint { color: var(--muted); font-size: 13px; }
-#status { margin-top: 12px; color: var(--muted); font-size: 13px; min-height: 1.5em; }
-#status.error { color: var(--error); }
+#status, .status { margin-top: 12px; color: var(--muted); font-size: 13px; min-height: 1.5em; }
+#status.error, .status.error { color: var(--error); }
+.panel-title { font-size: 18px; margin: 32px 0 8px; }
+.script { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px; background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; }
+.script p { flex: 1 1 260px; margin: 0; font-size: 17px; line-height: 1.6; }
+.script button { padding: 3px 10px; font-size: 13px; }
+.clip-source { margin-top: 0; }
+.clip-source input[type="file"] { flex: 1 1 240px; width: auto; }
+#record.recording { background: var(--error); border-color: var(--error); color: #fff; }
+label.check { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+label.check input { width: auto; }
+.voice-list { list-style: none; margin: 0; padding: 0; }
+.voice-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.voice-list li:last-child { border-bottom: 0; }
+.voice-list button { padding: 3px 10px; font-size: 13px; }
 audio { width: 100%; margin-top: 12px; }
 a { color: var(--accent); }
 .docs { margin-top: 32px; }

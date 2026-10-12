@@ -10,11 +10,13 @@ $("key").addEventListener("change", () => { store.set("tts-key", $("key").value)
 $("mode").addEventListener("change", () => store.set("tts-mode", $("mode").value));
 $("voice").addEventListener("change", () => store.set("tts-voice", $("voice").value));
 
-function headers() {
-  const h = { "Content-Type": "application/json" };
+function authHeaders() {
   const key = $("key").value.trim();
-  if (key) h["Authorization"] = `Bearer ${key}`;
-  return h;
+  return key ? { "Authorization": `Bearer ${key}` } : {};
+}
+
+function headers() {
+  return { "Content-Type": "application/json", ...authHeaders() };
 }
 
 function setStatus(msg, isError = false) {
@@ -26,7 +28,7 @@ async function errorMessage(res) {
   try { return (await res.json()).error?.message || res.statusText; } catch { return res.statusText; }
 }
 
-async function loadVoices() {
+async function loadVoices(select) {
   try {
     const res = await fetch("/v1/voices", { headers: headers() });
     if (!res.ok) throw new Error(await errorMessage(res));
@@ -37,7 +39,9 @@ async function loadVoices() {
       const opt = new Option(`${v.name}${v.description ? " — " + v.description : ""}`, v.id);
       $("voice").add(opt);
     }
-    $("voice").value = data.some((v) => v.id === saved) ? saved : def;
+    $("voice").value = select ?? (data.some((v) => v.id === saved) ? saved : def);
+    if (select) store.set("tts-voice", select);
+    renderCustomVoices(data.filter((v) => v.custom));
     setStatus(`${data.length} voices loaded.`);
     fillDocs();
   } catch (e) {
@@ -253,8 +257,180 @@ async function speak() {
 
 $("speak").addEventListener("click", speak);
 $("stop").addEventListener("click", stop);
-$("reloadVoices").addEventListener("click", loadVoices);
+$("reloadVoices").addEventListener("click", () => loadVoices());
 $("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) speak(); });
+// ── voice cloning ───────────────────────────────────────────────────────────
+const CLONE_MIN_S = 3, CLONE_MAX_S = 8;
+let clip = null;      // {blob: WAV Blob, seconds} ready to upload
+let clipUrl = null;
+let recorder = null, recordTimer = null;
+
+// Natural sentences of about 6-8 s, each using all six tones and a wide spread of vowels and consonants.
+const CLONE_SCRIPTS = [
+  "Hôm nay trời đẹp quá, tôi muốn rủ bạn bè ra quán cà phê, nghe những bản nhạc nhẹ nhàng và kể chuyện cũ.",
+  "Chào mọi người, cảm ơn các bạn đã đến đây hôm nay. Chúng ta sẽ cùng nhau bắt đầu buổi họp ngắn nhé.",
+  "Mỗi sáng thức dậy, tôi thường pha một ấm trà nóng, mở cửa sổ và lắng nghe tiếng chim hót ngoài vườn.",
+  "Cuối tuần này, gia đình tôi về quê thăm ông bà, ăn bữa cơm đầm ấm và nghỉ ngơi bên những cánh đồng lúa xanh.",
+];
+let scriptIndex = Math.floor(Math.random() * CLONE_SCRIPTS.length);
+const showScript = () => { $("cloneScript").textContent = CLONE_SCRIPTS[scriptIndex]; };
+$("nextScript").addEventListener("click", () => {
+  scriptIndex = (scriptIndex + 1) % CLONE_SCRIPTS.length;
+  showScript();
+});
+showScript();
+
+function setCloneStatus(msg, isError = false) {
+  $("cloneStatus").textContent = msg;
+  $("cloneStatus").classList.toggle("error", isError);
+}
+
+function updateCloneButton() {
+  $("clone").disabled = !clip || !$("cloneName").value.trim() || !!recorder;
+}
+
+// The server reads WAV/FLAC/OGG only, so decode anything the browser can play
+// (mp3, m4a, webm from the recorder…) and send it as a mono 16-bit WAV.
+async function useClip(blob) {
+  clip = null;
+  updateCloneButton();
+  let audio;
+  const ac = new AudioContext();
+  try {
+    audio = await ac.decodeAudioData(await blob.arrayBuffer());
+  } catch {
+    setCloneStatus("This browser cannot decode that file. Try WAV or MP3.", true);
+    return;
+  } finally {
+    ac.close().catch(() => {});
+  }
+  const rate = audio.sampleRate;
+  const n = Math.min(audio.length, Math.round((CLONE_MAX_S + 0.5) * rate));
+  const pcm = new Uint8Array(n * 2), view = new DataView(pcm.buffer);
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    for (let c = 0; c < audio.numberOfChannels; c++) s += audio.getChannelData(c)[i];
+    s = Math.max(-1, Math.min(1, s / audio.numberOfChannels));
+    view.setInt16(i * 2, s < 0 ? s * 32768 : s * 32767, true);
+  }
+  const seconds = audio.duration;
+  if (seconds < CLONE_MIN_S) {
+    setCloneStatus(`The clip is ${seconds.toFixed(1)} s; it needs at least ${CLONE_MIN_S} s of speech.`, true);
+    return;
+  }
+  clip = { blob: wavFromPcm([pcm], rate), seconds };
+  if (clipUrl) URL.revokeObjectURL(clipUrl);
+  clipUrl = URL.createObjectURL(clip.blob);
+  $("clipPlayer").src = clipUrl;
+  $("clipPlayer").hidden = false;
+  setCloneStatus(seconds > CLONE_MAX_S
+    ? `Clip is ${seconds.toFixed(1)} s; only the first ${CLONE_MAX_S} s will be used.`
+    : `Clip ready: ${seconds.toFixed(1)} s.`);
+  updateCloneButton();
+}
+
+$("cloneFile").addEventListener("change", () => {
+  const f = $("cloneFile").files[0];
+  if (!f) return;
+  if (!$("cloneName").value.trim()) $("cloneName").value = f.name.replace(/\.[^.]+$/, "").slice(0, 40);
+  useClip(f);
+});
+$("cloneName").addEventListener("input", updateCloneButton);
+
+async function toggleRecord() {
+  if (recorder) { recorder.stop(); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    setCloneStatus(`Microphone unavailable: ${e.message}. Recording needs https or localhost.`, true);
+    return;
+  }
+  const parts = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
+  recorder.onstop = () => {
+    clearInterval(recordTimer);
+    stream.getTracks().forEach((t) => t.stop());
+    recorder = null;
+    $("record").textContent = "Record";
+    $("record").classList.remove("recording");
+    $("cloneFile").value = "";
+    useClip(new Blob(parts, { type: parts[0]?.type || "audio/webm" }));
+  };
+  recorder.start();
+  $("record").textContent = "Stop recording";
+  $("record").classList.add("recording");
+  updateCloneButton();
+  const t0 = performance.now();
+  recordTimer = setInterval(() => {
+    const s = (performance.now() - t0) / 1000;
+    setCloneStatus(`Recording… ${s.toFixed(1)} s (aim for ${CLONE_MIN_S}–${CLONE_MAX_S} s)`);
+    if (s >= CLONE_MAX_S) recorder?.stop();
+  }, 100);
+}
+$("record").addEventListener("click", toggleRecord);
+
+async function cloneVoice() {
+  const name = $("cloneName").value.trim();
+  if (!clip || !name) return;
+  const form = new FormData();
+  form.append("name", name);
+  form.append("file", clip.blob, "reference.wav");
+  form.append("denoise", $("cloneDenoise").checked ? "true" : "false");
+  form.append("gender", $("cloneGender").value);
+  form.append("description", $("cloneDesc").value.trim());
+  $("clone").disabled = true;
+  setCloneStatus("Cloning… (the model analyses the clip; this takes a few seconds)");
+  const t0 = performance.now();
+  try {
+    const res = await fetch("/v1/voices", { method: "POST", headers: authHeaders(), body: form });
+    if (!res.ok) throw new Error(await errorMessage(res));
+    const v = await res.json();
+    setCloneStatus(`Cloned "${v.name}" in ${Math.round(performance.now() - t0)} ms. It is now selected above.`);
+    $("cloneName").value = $("cloneDesc").value = $("cloneFile").value = "";
+    clip = null;
+    $("clipPlayer").hidden = true;
+    await loadVoices(v.id);
+    fillDocs();
+  } catch (e) {
+    setCloneStatus(`Clone failed: ${e.message}`, true);
+  } finally {
+    updateCloneButton();
+  }
+}
+$("clone").addEventListener("click", cloneVoice);
+
+function renderCustomVoices(list) {
+  const ul = $("customVoices");
+  ul.innerHTML = "";
+  if (!list.length) { ul.innerHTML = '<li class="hint">None yet.</li>'; return; }
+  for (const v of list) {
+    const li = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = [v.name, v.gender, v.description].filter(Boolean).join(" · ");
+    const del = document.createElement("button");
+    del.textContent = "Delete";
+    del.addEventListener("click", () => deleteVoice(v.id, del));
+    li.append(label, del);
+    ul.append(li);
+  }
+}
+
+async function deleteVoice(id, btn) {
+  if (!confirm(`Delete the cloned voice "${id}"?`)) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/v1/voices/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+    if (!res.ok) throw new Error(await errorMessage(res));
+    setCloneStatus(`Deleted "${id}".`);
+    await loadVoices();
+  } catch (e) {
+    btn.disabled = false;
+    setCloneStatus(`Delete failed: ${e.message}`, true);
+  }
+}
+
 // ── API docs: fill code samples, tabs, copy ─────────────────────────────────
 document.querySelectorAll(".docs pre, .docs .base").forEach((el) => { el.dataset.tpl = el.textContent; });
 
