@@ -10,7 +10,10 @@
 <main>
   <header>
     <h1>VieNeu TTS Test</h1>
-    <span id="device" title="Device the next request will run on">checking…</span>
+    <span class="header-right">
+      <a href="/lora">Train a LoRA voice</a>
+      <span id="device" title="Device the next request will run on">checking…</span>
+    </span>
   </header>
   <div class="panel">
     <label for="key">API key</label>
@@ -95,6 +98,11 @@
     <ul id="customVoices" class="voice-list"><li class="hint">None yet.</li></ul>
   </div>
 
+  <h2 class="panel-title">LoRA voices</h2>
+  <div class="panel">
+    <div class="hint">For a closer match than cloning, read about one minute of sentences on the <a href="/lora">LoRA page</a>; the server then fine-tunes the model on your voice. LoRA voices appear in the voice list marked "LoRA" and run on the GPU only.</div>
+  </div>
+
   <section class="docs">
     <h2>Calling the API from another service</h2>
     <p>Base URL: <code class="base">{{BASE}}</code>. The caller must be able to reach this address. By default the server listens only on <code>127.0.0.1</code>. To accept requests from other machines, set <code>HOST=0.0.0.0</code> in <code>.env</code>, and also set <code>TTS_API_KEY</code>.</p>
@@ -109,7 +117,10 @@
         <tr><td>GET</td><td><code>/v1/voices</code></td><td>Lists the voices. Pass a <code>data[].id</code> as <code>voice</code>. If you leave <code>voice</code> out, the server uses <code>default</code>.</td></tr>
         <tr><td>POST</td><td><code>/v1/audio/speech</code></td><td>Turns text into audio.</td></tr>
         <tr><td>POST</td><td><code>/v1/voices</code></td><td>Clones a voice. Multipart form: <code>name</code> (1–40 letters, digits, spaces or <code>- _ . ( )</code>), <code>file</code> (WAV, FLAC or OGG, 3–8 s, up to 5 MB), optional <code>denoise</code> (default true), <code>gender</code>, <code>description</code>. The new voice is usable right away by its name.</td></tr>
-        <tr><td>DELETE</td><td><code>/v1/voices/{id}</code></td><td>Removes a cloned voice. Built-in voices cannot be removed (403).</td></tr>
+        <tr><td>DELETE</td><td><code>/v1/voices/{id}</code></td><td>Removes a cloned or LoRA voice. Built-in voices cannot be removed (403).</td></tr>
+        <tr><td>GET, POST</td><td><code>/v1/lora/sessions</code></td><td>Lists LoRA recording sessions, or starts one: JSON <code>{"name", "gender", "description"}</code>. The session holds the sentences to read.</td></tr>
+        <tr><td>PUT</td><td><code>/v1/lora/sessions/{id}/clips/{i}</code></td><td>Saves (or replaces) the recording of sentence <code>i</code>. Multipart <code>file</code>: WAV, FLAC or OGG, 1–20 s.</td></tr>
+        <tr><td>POST</td><td><code>/v1/lora/sessions/{id}/train</code></td><td>Queues training once every sentence is recorded. Poll <code>GET /v1/lora/sessions/{id}</code> for <code>status</code> and <code>progress</code>; at <code>"ready"</code> the voice is in <code>/v1/voices</code> with <code>"lora": true</code>.</td></tr>
         <tr><td>GET</td><td><code>/health</code></td><td>Status and device (no key needed). Returns 503 while the model loads.</td></tr>
       </tbody>
     </table>
@@ -121,7 +132,7 @@
         <tr><td><code>input</code></td><td>yes</td><td>The text to read, up to 20,000 characters.</td></tr>
         <tr><td><code>voice</code></td><td>no</td><td>A voice id from <code>/v1/voices</code>. Leave it out to use the default voice.</td></tr>
         <tr><td><code>response_format</code></td><td>no</td><td><code>"wav"</code> (default) returns one complete file. <code>"pcm"</code> streams raw audio as it is generated.</td></tr>
-        <tr><td><code>device</code></td><td>no</td><td><code>"gpu"</code> or <code>"cpu"</code>. Leave it out to use the server default (<code>TTS_DEFAULT_DEVICE</code>). The first request for a device that is not loaded yet waits while it loads. The response header <code>X-Device</code> says which device ran the request.</td></tr>
+        <tr><td><code>device</code></td><td>no</td><td><code>"gpu"</code> or <code>"cpu"</code>. Leave it out to use the server default (<code>TTS_DEFAULT_DEVICE</code>). LoRA voices always run on the GPU and return 400 for <code>"cpu"</code>. The first request for a device that is not loaded yet waits while it loads. The response header <code>X-Device</code> says which device ran the request.</td></tr>
         <tr><td><code>model</code></td><td>no</td><td>Accepted for OpenAI compatibility (<code>"vieneu-v3-turbo"</code>).</td></tr>
       </tbody>
     </table>

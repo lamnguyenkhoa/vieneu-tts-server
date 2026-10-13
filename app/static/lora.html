@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VieNeu LoRA Voice</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>LoRA voice training</h1>
+    <a href="/">Back to the test page</a>
+  </header>
+  <div class="panel">
+    <label for="key">API key</label>
+    <input id="key" type="password" placeholder="Leave empty if TTS_API_KEY is not set" autocomplete="off">
+    <div id="gpuWarning" class="status error" hidden>This server has no CUDA GPU, so it cannot train or run LoRA voices.</div>
+  </div>
+
+  <!-- List of sessions + new voice -->
+  <section id="listView">
+    <h2 class="panel-title">New voice</h2>
+    <div class="panel">
+      <div class="hint">You will read <span id="sentenceCount">14</span> short sentences, about one minute in total. Each sentence is its own clip, so a mistake only costs one retake. When every sentence is saved, the server trains a voice model for you on its GPU (a few minutes).</div>
+      <div class="row">
+        <div>
+          <label for="newName">Name</label>
+          <input id="newName" maxlength="40" placeholder="e.g. Lan (LoRA)" autocomplete="off">
+        </div>
+        <div>
+          <label for="newGender">Gender</label>
+          <select id="newGender">
+            <option value="">(not set)</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select>
+        </div>
+      </div>
+      <label for="newDesc">Description <span class="hint">(optional)</span></label>
+      <input id="newDesc" maxlength="200" autocomplete="off">
+      <div class="actions">
+        <button id="create" class="primary" disabled>Start recording</button>
+      </div>
+      <div id="createStatus" class="status"></div>
+    </div>
+
+    <h2 class="panel-title">Your LoRA voices</h2>
+    <div class="panel">
+      <ul id="sessions" class="voice-list"><li class="hint">Loading…</li></ul>
+    </div>
+  </section>
+
+  <!-- One session: record, then train -->
+  <section id="sessionView" hidden>
+    <div class="panel">
+      <div class="session-head">
+        <strong id="sName"></strong>
+        <span id="sBadge" class="badge"></span>
+        <button id="back">All voices</button>
+      </div>
+      <div class="progress"><div id="recordedBar"></div></div>
+      <div id="recordedText" class="hint"></div>
+    </div>
+
+    <div id="recorder" class="panel">
+      <div class="hint" id="sentencePos"></div>
+      <p id="prompt" class="prompt" lang="vi"></p>
+      <div class="level" title="Microphone level"><div id="levelBar"></div></div>
+      <div class="actions">
+        <button id="recBtn" class="primary">Record</button>
+        <button id="playBtn" disabled>Play</button>
+        <button id="saveBtn" class="primary" disabled>Save &amp; next</button>
+        <button id="retakeBtn" disabled>Retake</button>
+        <span class="spacer"></span>
+        <button id="prevBtn" title="Previous sentence">Previous</button>
+        <button id="nextBtn" title="Next sentence">Next</button>
+      </div>
+      <div id="recStatus" class="status"></div>
+      <div class="hint">Read in your normal voice and pace, in a quiet room about 20 cm from the mic. Wait about half a second after pressing Record before you speak. Keys: <kbd>Space</kbd> record / stop, <kbd>Enter</kbd> save &amp; next, <kbd>R</kbd> retake, <kbd>←</kbd> <kbd>→</kbd> move between sentences.</div>
+    </div>
+
+    <h2 class="panel-title">Sentences</h2>
+    <div class="panel">
+      <ol id="sentences" class="sentence-list"></ol>
+    </div>
+
+    <h2 class="panel-title">Training</h2>
+    <div id="trainPanel" class="panel">
+      <label class="check"><input id="denoise" type="checkbox" checked> Remove background noise before training</label>
+      <div class="actions">
+        <button id="trainBtn" class="primary" disabled>Start training</button>
+      </div>
+      <div id="trainHint" class="hint">Training runs on the server's GPU and takes a few minutes. You can leave this page and come back later.</div>
+      <div id="trainProgress" hidden>
+        <div class="progress"><div id="trainBar"></div></div>
+        <div id="trainText" class="hint"></div>
+      </div>
+      <div id="trainStatus" class="status"></div>
+      <details id="logBox" hidden>
+        <summary>Training log</summary>
+        <pre id="trainLog" class="log"></pre>
+      </details>
+    </div>
+
+    <div id="tryPanel" hidden>
+      <h2 class="panel-title">Try your voice</h2>
+      <div class="panel">
+        <label for="tryText">Text</label>
+        <textarea id="tryText">Xin chào, đây là giọng nói của tôi sau khi huấn luyện. Bạn thấy có giống không?</textarea>
+        <div class="actions">
+          <button id="trySpeak" class="primary">Speak</button>
+          <a href="/">Use it on the test page</a>
+        </div>
+        <div id="tryStatus" class="status"></div>
+        <audio id="tryPlayer" controls hidden></audio>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="deleteSession" class="danger">Delete this voice</button>
+    </div>
+    <audio id="takePlayer" hidden></audio>
+  </section>
+</main>
+<script src="/static/lora.js"></script>
+</body>
+</html>

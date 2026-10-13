@@ -36,12 +36,12 @@ async function loadVoices(select) {
     const saved = store.get("tts-voice");
     $("voice").innerHTML = "";
     for (const v of data) {
-      const opt = new Option(`${v.name}${v.description ? " — " + v.description : ""}`, v.id);
+      const opt = new Option(`${v.name}${v.lora ? " (LoRA, GPU)" : ""}${v.description ? " — " + v.description : ""}`, v.id);
       $("voice").add(opt);
     }
     $("voice").value = select ?? (data.some((v) => v.id === saved) ? saved : def);
     if (select) store.set("tts-voice", select);
-    renderCustomVoices(data.filter((v) => v.custom));
+    renderCustomVoices(data.filter((v) => v.custom && !v.lora));
     setStatus(`${data.length} voices loaded.`);
     fillDocs();
   } catch (e) {

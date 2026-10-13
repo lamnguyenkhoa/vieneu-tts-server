@@ -21,10 +21,15 @@ Requests need `Authorization: Bearer <TTS_API_KEY>` when `TTS_API_KEY` is set.
 |-|-|-|
 | GET | `/v1/voices` | `{"object":"list","default":"<id>","data":[{"id","name","gender","description","featured","aliases","custom"}]}` |
 | POST | `/v1/voices` | Clone a voice. Multipart: `name`, `file` (3-8 s of speech, WAV/FLAC/OGG, max 5 MB; longer clips are cut to 8 s), `denoise` (default true), `description`, `gender`. Returns the new voice; 409 if the name is taken |
-| DELETE | `/v1/voices/{id}` | Remove a cloned voice (403 for built-in voices, 404 if unknown) |
+| DELETE | `/v1/voices/{id}` | Remove a cloned or LoRA voice (403 for built-in voices, 404 if unknown) |
+| GET, POST | `/v1/lora/sessions` | List LoRA recording sessions, or start one: `{"name","gender","description"}`. A session holds the sentences to read |
+| GET, DELETE | `/v1/lora/sessions/{id}` | A session with its sentences, clips, `status` and training `progress`; delete it with its clips and model |
+| PUT, GET, DELETE | `/v1/lora/sessions/{id}/clips/{i}` | Save (or retake) the recording of sentence `i` (multipart `file`, WAV/FLAC/OGG, 1-20 s), fetch it, or drop it |
+| POST | `/v1/lora/sessions/{id}/train` | `{"denoise"}`: queue training once every sentence is recorded |
 | POST | `/v1/audio/speech` | `{"model","voice","input","response_format","stream_format","sample_rate","device"}` plus sampling fields (below) returns audio; `X-Device` says which device ran it |
 | GET | `/v1/models` | Model info: `backend`, `max_streams`, `response_formats`, `stream_formats`, `sample_rates`, devices |
 | GET | `/` | Browser test page: pick a voice, type text, play it streamed (pcm) or as a WAV file |
+| GET | `/lora` | LoRA page: record the sentences one by one (retake any), then train and try the voice |
 | GET | `/health` | Liveness check with `backend`, `max_streams`, `active`, `waiting`, `sample_rate` (returns 503 while the model loads) |
 
 `response_format`:
@@ -58,3 +63,12 @@ curl -X POST http://127.0.0.1:8000/v1/audio/speech \
 Cloned voices are saved in `TTS_VOICES_DIR` (default `./data/voices`): `custom_voices.json` holds each voice's speaker embedding and reference codes, and `clips/` keeps the trimmed reference clip. They load again at startup, on both devices. Back up that folder when you redeploy.
 
 Errors use OpenAI's shape: `{"error":{"message","type","code"}}`. The server returns 400 for bad input or an unknown voice, 401 for a bad key, and 429 when it is busy.
+
+## LoRA voices
+
+A LoRA voice is the model fine-tuned on one speaker, which tracks the voice more closely than a clone. On the `/lora` page the speaker reads 14 short sentences (about a minute). Each sentence is its own clip, so a mistake only costs one retake. Then they press Start training. Training follows VieNeu-TTS's [`finetune/`](https://github.com/pnnbao97/VieNeu-TTS/tree/main/finetune) pipeline: each clip is denoised and trimmed, LoRA is trained on the backbone, and the merged model is saved with the voice's speaker embedding. It runs in a separate process, one job at a time, and takes about a minute on an RTX 5060. When it finishes, the voice is listed in `/v1/voices` with `"lora": true` and is used by name like any other voice.
+
+- LoRA voices need a CUDA GPU, for both training and speech. A request for one with `"device": "cpu"` returns 400.
+- Each voice is a full model (about 250 MB on disk). It loads on the GPU on first use; `TTS_LORA_MAX_LOADED` (default 1) caps how many stay loaded.
+- Sessions, clips and models live in `TTS_LORA_DIR` (default `./data/lora`). Back it up with `data/voices`. If the server restarts during training, that session is marked failed and can be trained again.
+- Training settings: `TTS_LORA_EPOCHS`, `TTS_LORA_LR`, `TTS_LORA_RANK`, `TTS_LORA_BATCH` (see `.env.example`). Upstream recommends 10-30 minutes of audio for best results; one minute is the quick start.

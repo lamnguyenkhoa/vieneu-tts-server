@@ -14,7 +14,19 @@ VieNeu-TTS v3 Turbo speech server (OpenAI-style), per tts-api.txt.
          sse: text/event-stream of {"type": "speech.audio.delta", "audio": <base64>} then
               {"type": "speech.audio.done", "usage": {"output_samples", "sample_rate", "seconds"}}
     Cloned voices are saved under TTS_VOICES_DIR and reloaded at startup.
-    GET  /v1/models, GET /health, GET / (browser test page)
+
+    LoRA voices (a fine-tuned model per voice, GPU only; see app/lora.py):
+    GET    /v1/lora/sessions                      -> list of recording/training sessions
+    POST   /v1/lora/sessions                      -> {"name", "gender", "description"}: new session + script
+    GET    /v1/lora/sessions/{id}                 -> session with its sentences, clips, training progress
+    PUT    /v1/lora/sessions/{id}/clips/{i}       -> multipart {file}: record (or retake) sentence i
+    GET    /v1/lora/sessions/{id}/clips/{i}       -> the recorded WAV
+    DELETE /v1/lora/sessions/{id}/clips/{i}       -> drop a recording
+    POST   /v1/lora/sessions/{id}/train           -> {"denoise"}: queue training once every sentence is recorded
+    DELETE /v1/lora/sessions/{id}                 -> delete the session, its clips and its model
+    A trained voice appears in /v1/voices with "lora": true and is used like any other voice.
+
+    GET  /v1/models, GET /health, GET / (browser test page), GET /lora (LoRA recording page)
 
 Auth: ``Authorization: Bearer $TTS_API_KEY`` when TTS_API_KEY is set.
 Run:  uv run python -m app.main
@@ -35,6 +47,7 @@ import unicodedata
 import uuid
 import wave
 import weakref
+from collections import OrderedDict
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -46,6 +59,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app import lora
+from app.lora import LoraStore, LoraTrainer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("tts-server")
@@ -94,19 +110,25 @@ def _cuda_available() -> bool:
 
 
 class Engine:
-    """One loaded model on one device: ``kind`` is "gpu" (PyTorch/CUDA) or "cpu" (ONNX Runtime)."""
+    """One loaded model on one device: ``kind`` is "gpu" (PyTorch/CUDA) or "cpu" (ONNX Runtime).
 
-    def __init__(self, kind: str) -> None:
+    ``model_dir`` loads a fine-tuned (LoRA-merged) model instead of the base one; GPU only.
+    """
+
+    def __init__(self, kind: str, model_dir: Optional[Path] = None, label: Optional[str] = None) -> None:
         from vieneu import Vieneu
 
         self.kind = kind
+        self.label = label or kind
+        self.last_used = time.monotonic()
         concurrency = max(1, _env_int("TTS_MAX_CONCURRENCY", 4))
-        log.info("loading VieNeu-TTS v3 Turbo on %s", kind.upper())
+        log.info("loading VieNeu-TTS v3 Turbo on %s%s", kind.upper(), f" ({label})" if label else "")
         t = time.perf_counter()
         if kind == "gpu":
             import torch
 
-            self.tts = Vieneu(mode="v3turbo", backend="pytorch", device="cuda", max_streams=concurrency)
+            extra = {"backbone_repo": str(model_dir)} if model_dir else {}
+            self.tts = Vieneu(mode="v3turbo", backend="pytorch", device="cuda", max_streams=concurrency, **extra)
             # Inside this process the chosen GPU is always cuda:0; show nvidia-smi's index instead.
             index = os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")[0].strip() or "0"
             self.device = f"GPU {index}: {torch.cuda.get_device_name(0)}"
@@ -128,7 +150,7 @@ class Engine:
         # Warm-up so the first client does not pay for graph capture / ONNX load.
         for _ in self.tts.infer_stream("Xin chào.", apply_watermark=False):
             pass
-        log.info("%s ready in %.1fs: device=%s concurrency=%d", kind.upper(),
+        log.info("%s ready in %.1fs: device=%s concurrency=%d", label or kind.upper(),
                  time.perf_counter() - t, self.device, self.max_concurrency)
 
     def acquire(self):
@@ -175,7 +197,7 @@ class Engine:
         finally:
             release()
             total = time.perf_counter() - t0
-            log.info("%s done on %s: chars=%d first_audio=%s total=%.2fs audio=%.2fs", rid, self.kind,
+            log.info("%s done on %s: chars=%d first_audio=%s total=%.2fs audio=%.2fs", rid, self.label,
                      len(text), f"{first * 1000:.0f}ms" if first is not None else "-", total,
                      samples / SAMPLE_RATE)
 
@@ -283,8 +305,15 @@ class Engines:
         self._loaded: dict[str, Engine] = {}
         self._loading: set[str] = set()
         self._lock = threading.Lock()
-        voices_dir = Path(os.environ.get("TTS_VOICES_DIR") or Path(__file__).resolve().parent.parent / "data" / "voices")
+        root = Path(__file__).resolve().parent.parent
+        voices_dir = Path(os.environ.get("TTS_VOICES_DIR") or root / "data" / "voices")
         self.store = VoiceStore(voices_dir)
+        # LoRA voices: each one is its own fine-tuned model, loaded on the GPU on first use.
+        self.lora_store = LoraStore(Path(os.environ.get("TTS_LORA_DIR") or root / "data" / "lora"))
+        self.lora_trainer = LoraTrainer(self.lora_store, on_ready=self._lora_trained)
+        self.lora_max_loaded = max(1, _env_int("TTS_LORA_MAX_LOADED", 1))
+        self._lora: "OrderedDict[str, Engine]" = OrderedDict()  # session id -> engine, least recently used first
+        self._lora_lock = threading.Lock()
         primary = self.get(self.default)
 
         default = os.environ.get("TTS_DEFAULT_VOICE") or None
@@ -325,10 +354,74 @@ class Engines:
     def voices(self) -> list[dict]:
         from vieneu.v3turbo import sorted_voices
 
-        return [{"id": name, "name": name, "gender": v.get("gender", ""),
-                 "description": v.get("description", ""), "featured": v.get("featured"),
-                 "aliases": list(v.get("aliases") or []), "custom": bool(v.get("custom"))}
-                for name, v in sorted_voices(self.primary().tts._preset_voices)]
+        out = [{"id": name, "name": name, "gender": v.get("gender", ""),
+                "description": v.get("description", ""), "featured": v.get("featured"),
+                "aliases": list(v.get("aliases") or []), "custom": bool(v.get("custom")), "lora": False}
+               for name, v in sorted_voices(self.primary().tts._preset_voices)]
+        out += [{"id": s["name"], "name": s["name"], "gender": s["gender"], "description": s["description"],
+                 "featured": None, "aliases": [], "custom": True, "lora": True}
+                for s in sorted(self.lora_store.ready(), key=lambda s: s["name"].casefold())]
+        return out
+
+    def name_taken(self, name: str) -> bool:
+        """Voice names are shared by presets, cloned voices and LoRA voices (any status)."""
+        return self.primary().tts.resolve_voice_name(name) is not None or self.lora_store.find_name(name) is not None
+
+    # ── LoRA voices ──────────────────────────────────────────────────────────
+    def lora_voice(self, name: str) -> Optional[dict]:
+        """The ready LoRA session for voice ``name``, if it is one."""
+        s = self.lora_store.find_name(unicodedata.normalize("NFC", name))
+        return s if s and s["status"] == "ready" else None
+
+    def get_lora(self, session: dict) -> Engine:
+        """The engine for a ready LoRA voice, loading it (and unloading the least recently used idle one)."""
+        if not self.gpu_available:
+            raise HTTPException(400, "LoRA voices need a CUDA GPU, and this server has none")
+        sid = session["id"]
+        with self._lora_lock:
+            eng = self._lora.get(sid)
+            if eng is None:
+                while len(self._lora) >= self.lora_max_loaded:
+                    # Idle = no stream running or waiting, and not just handed to a request.
+                    idle = [k for k, e in self._lora.items()
+                            if e.active == 0 and e.waiting == 0 and time.monotonic() - e.last_used > 5]
+                    if not idle:
+                        break  # all busy: load one more for now rather than cut a stream off
+                    self._unload_lora(idle[0])
+                eng = Engine("gpu", model_dir=self.lora_store.path(sid) / "model", label=f"LoRA '{session['name']}'")
+                self._lora[sid] = eng
+            self._lora.move_to_end(sid)
+            eng.last_used = time.monotonic()
+            return eng
+
+    def _unload_lora(self, sid: str) -> None:
+        eng = self._lora.pop(sid, None)
+        if eng is None:
+            return
+        log.info("unloading %s", eng.label)
+        eng.tts.close()
+        del eng
+        import gc
+
+        import torch
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def _lora_trained(self, session: dict) -> None:
+        """Called by the trainer when a voice is ready: load it now so the first request does not wait."""
+        if self.gpu_available:
+            self.get_lora(session)
+
+    def remove_lora(self, sid: str) -> dict:
+        """Delete a LoRA session (recording, training or ready), its clips and its model."""
+        with self._lora_lock:
+            eng = self._lora.get(sid)
+            if eng is not None and (eng.active or eng.waiting):
+                raise HTTPException(409, "this voice is speaking right now; try again in a moment")
+            self._unload_lora(sid)
+        self.lora_trainer.cancel(sid)
+        return self.lora_store.delete(sid)
 
     def clone(self, name: str, clip_path: Path, clip_wav: bytes, denoise: bool,
               description: str, gender: str) -> dict:
@@ -367,6 +460,9 @@ class Engines:
                     "max_concurrency": eng.max_concurrency if eng else None,
                     "active": eng.active if eng else 0, "waiting": eng.waiting if eng else 0}
         return {"gpu": one("gpu"), "cpu": one("cpu")}
+
+    def lora_status(self) -> dict:
+        return {"loaded": [e.label for e in list(self._lora.values())], "max_loaded": self.lora_max_loaded}
 
 
 ENGINES: Optional[Engines] = None
@@ -502,12 +598,19 @@ def speech(req: SpeechRequest):
     if rate not in SAMPLE_RATES:
         raise HTTPException(400, f"sample_rate must be one of {SAMPLE_RATES}")
     voice = pool.default_voice
-    if req.voice:
+    lora_session = pool.lora_voice(req.voice) if req.voice else None
+    if lora_session:
+        # A LoRA voice is its own fine-tuned model; the CPU (ONNX) graphs only hold the base model.
+        if (req.device or "gpu").lower() != "gpu":
+            raise HTTPException(400, f"'{lora_session['name']}' is a LoRA voice; LoRA voices run on the GPU only")
+        voice = lora_session["name"]
+    elif req.voice:
         voice = pool.primary().tts.resolve_voice_name(req.voice)
         if voice is None:
             raise HTTPException(400, f"unknown voice '{req.voice}'; see GET /v1/voices")
 
-    eng = pool.get(req.device)  # the first request for the other device loads it (can take a while)
+    # The first request for the other device, or for a LoRA voice, loads its model (can take a while).
+    eng = pool.get_lora(lora_session) if lora_session else pool.get(req.device)
 
     rid = f"tts-{uuid.uuid4().hex[:8]}"
     headers = {"X-Request-Id": rid, "X-Sample-Rate": str(rate), "X-Device": eng.kind,
@@ -571,15 +674,21 @@ def _read_clip(raw: bytes) -> tuple[np.ndarray, int]:
     return np.asarray(wav, dtype=np.float32), int(sr)
 
 
+def _voice_name(name: str) -> str:
+    """NFC, single spaces; 400 unless it is a valid voice id."""
+    name = re.sub(r"\s+", " ", unicodedata.normalize("NFC", name)).strip()
+    if not _VOICE_NAME_RE.fullmatch(name):
+        raise HTTPException(400, "voice name must be 1-40 letters, digits, spaces or - _ . ( )")
+    return name
+
+
 # Plain ``def``: FastAPI runs it in a thread, so reading the upload and enrolling do not stall the event loop.
 @app.post("/v1/voices", dependencies=[Depends(_auth)])
 def add_voice(name: str = Form(...), file: UploadFile = File(...), denoise: bool = Form(True),
               description: str = Form(""), gender: str = Form("")):
     pool = engines()
-    name = re.sub(r"\s+", " ", unicodedata.normalize("NFC", name)).strip()
-    if not _VOICE_NAME_RE.fullmatch(name):
-        raise HTTPException(400, "voice name must be 1-40 letters, digits, spaces or - _ . ( )")
-    if pool.primary().tts.resolve_voice_name(name) is not None:
+    name = _voice_name(name)
+    if pool.name_taken(name):
         raise HTTPException(409, f"a voice named '{name}' already exists")
     raw = file.file.read(CLONE_MAX_BYTES + 1)
     if not raw:
@@ -614,6 +723,11 @@ def add_voice(name: str = Form(...), file: UploadFile = File(...), denoise: bool
 def delete_voice(name: str):
     pool = engines()
     name = unicodedata.normalize("NFC", name)
+    lora_session = pool.lora_voice(name)
+    if lora_session:
+        pool.remove_lora(lora_session["id"])
+        log.info("removed LoRA voice '%s'", lora_session["name"])
+        return {"id": lora_session["name"], "deleted": True}
     if name not in pool.store.voices:
         if pool.primary().tts.resolve_voice_name(name) is not None:
             raise HTTPException(403, f"'{name}' is a built-in voice and cannot be removed")
@@ -621,6 +735,133 @@ def delete_voice(name: str):
     pool.remove(name)
     log.info("removed cloned voice '%s'", name)
     return {"id": name, "deleted": True}
+
+
+# ── LoRA voices: record the script, then train ───────────────────────────────
+
+class LoraSessionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    gender: str = ""
+    description: str = ""
+
+
+class LoraTrainRequest(BaseModel):
+    denoise: bool = True  # clean each clip with the model's denoiser before training
+
+
+def _lora_session(sid: str) -> dict:
+    try:
+        return engines().lora_store.get(sid)
+    except KeyError:
+        raise HTTPException(404, f"no LoRA session '{sid}'")
+
+
+def _lora_view(s: dict, detail: bool = True) -> dict:
+    pool = engines()
+    return pool.lora_store.public(s, detail=detail, queue_position=pool.lora_trainer.position(s["id"]))
+
+
+def _lora_index(s: dict, index: int) -> int:
+    if not 0 <= index < len(s["sentences"]):
+        raise HTTPException(404, f"sentence {index} does not exist (0-{len(s['sentences']) - 1})")
+    return index
+
+
+def _lora_editable(s: dict) -> None:
+    if s["status"] not in lora.EDITABLE:
+        raise HTTPException(409, f"the session is {s['status']}; its clips can no longer change")
+
+
+@app.get("/v1/lora/sessions", dependencies=[Depends(_auth)])
+def lora_sessions():
+    pool = engines()
+    sessions = sorted(pool.lora_store.sessions.values(), key=lambda s: s["created_at"], reverse=True)
+    return {"object": "list", "gpu_available": pool.gpu_available,
+            "clip_min_seconds": lora.CLIP_MIN_SECONDS, "clip_max_seconds": lora.CLIP_MAX_SECONDS,
+            "script_sentences": len(lora.LORA_SCRIPT),
+            "data": [_lora_view(s, detail=False) for s in sessions]}
+
+
+@app.post("/v1/lora/sessions", dependencies=[Depends(_auth)])
+def lora_create(req: LoraSessionRequest):
+    pool = engines()
+    name = _voice_name(req.name)
+    if pool.name_taken(name):
+        raise HTTPException(409, f"a voice named '{name}' already exists")
+    s = pool.lora_store.create(name, req.gender.strip()[:20], req.description.strip()[:200])
+    log.info("LoRA session %s created for '%s'", s["id"], name)
+    return _lora_view(s)
+
+
+@app.get("/v1/lora/sessions/{sid}", dependencies=[Depends(_auth)])
+def lora_get(sid: str):
+    return _lora_view(_lora_session(sid))
+
+
+@app.delete("/v1/lora/sessions/{sid}", dependencies=[Depends(_auth)])
+def lora_delete(sid: str):
+    s = _lora_session(sid)
+    engines().remove_lora(sid)
+    log.info("LoRA session %s ('%s') deleted", sid, s["name"])
+    return {"id": sid, "deleted": True}
+
+
+@app.put("/v1/lora/sessions/{sid}/clips/{index}", dependencies=[Depends(_auth)])
+def lora_put_clip(sid: str, index: int, file: UploadFile = File(...)):
+    """Save (or replace, for a retake) the recording of sentence ``index``."""
+    s = _lora_session(sid)
+    _lora_index(s, index)
+    _lora_editable(s)
+    raw = file.file.read(lora.CLIP_MAX_BYTES + 1)
+    if not raw:
+        raise HTTPException(400, "the audio file is empty")
+    if len(raw) > lora.CLIP_MAX_BYTES:
+        raise HTTPException(413, f"the audio file is larger than {lora.CLIP_MAX_BYTES // (1024 * 1024)} MB")
+    wav, sr = _read_clip(raw)
+    seconds = len(wav) / sr if sr else 0
+    if not lora.CLIP_MIN_SECONDS <= seconds <= lora.CLIP_MAX_SECONDS:
+        raise HTTPException(400, f"the clip is {seconds:.1f} s; it must be "
+                                 f"{lora.CLIP_MIN_SECONDS:.0f}-{lora.CLIP_MAX_SECONDS:.0f} s")
+    peak = float(np.abs(wav).max()) if len(wav) else 0.0
+    if peak < 0.01:
+        raise HTTPException(400, "the clip is silent; check the microphone")
+    engines().lora_store.set_clip(sid, index, _wav_bytes(_pcm16(wav), sr), seconds, peak)
+    return _lora_view(s)
+
+
+@app.get("/v1/lora/sessions/{sid}/clips/{index}", dependencies=[Depends(_auth)])
+def lora_get_clip(sid: str, index: int):
+    s = _lora_session(sid)
+    clip = s["clips"].get(str(_lora_index(s, index)))
+    if not clip:
+        raise HTTPException(404, f"sentence {index} is not recorded yet")
+    return FileResponse(engines().lora_store.path(sid) / "clips" / clip["file"], media_type="audio/wav",
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/v1/lora/sessions/{sid}/clips/{index}", dependencies=[Depends(_auth)])
+def lora_delete_clip(sid: str, index: int):
+    s = _lora_session(sid)
+    _lora_index(s, index)
+    _lora_editable(s)
+    engines().lora_store.remove_clip(sid, index)
+    return _lora_view(s)
+
+
+@app.post("/v1/lora/sessions/{sid}/train", dependencies=[Depends(_auth)])
+def lora_train(sid: str, req: Optional[LoraTrainRequest] = None):
+    pool = engines()
+    s = _lora_session(sid)
+    _lora_editable(s)
+    if not pool.gpu_available:
+        raise HTTPException(400, "LoRA training needs a CUDA GPU, and this server has none")
+    missing = [i + 1 for i in range(len(s["sentences"])) if str(i) not in s["clips"]]
+    if missing:
+        raise HTTPException(400, f"record every sentence first; missing: {', '.join(map(str, missing))}")
+    pool.lora_store.update(sid, denoise=(req or LoraTrainRequest()).denoise)
+    pool.lora_trainer.enqueue(sid)
+    log.info("LoRA session %s ('%s') queued for training", sid, s["name"])
+    return _lora_view(s)
 
 
 @app.get("/v1/models", dependencies=[Depends(_auth)])
@@ -657,6 +898,11 @@ def test_page():
     return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
+@app.get("/lora", include_in_schema=False)
+def lora_page():
+    return FileResponse(STATIC_DIR / "lora.html", headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/health")
 def health():
     if ENGINES is None:
@@ -665,7 +911,8 @@ def health():
     # backend / max_streams / active / waiting: the old build's fields, for the default device.
     return {"status": "ok", "backend": primary.backend, "max_streams": primary.max_concurrency,
             "active": primary.active, "waiting": primary.waiting, "sample_rate": SAMPLE_RATE,
-            "device": primary.device, "default_device": ENGINES.default, "devices": ENGINES.status()}
+            "device": primary.device, "default_device": ENGINES.default, "devices": ENGINES.status(),
+            "lora": ENGINES.lora_status()}
 
 
 def main() -> None:
