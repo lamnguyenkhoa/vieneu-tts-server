@@ -107,7 +107,9 @@ class Engine:
             import torch
 
             self.tts = Vieneu(mode="v3turbo", backend="pytorch", device="cuda", max_streams=concurrency)
-            self.device = f"GPU: {torch.cuda.get_device_name(0)}"
+            # Inside this process the chosen GPU is always cuda:0; show nvidia-smi's index instead.
+            index = os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")[0].strip() or "0"
+            self.device = f"GPU {index}: {torch.cuda.get_device_name(0)}"
             self.max_concurrency = concurrency
         else:
             self.tts = Vieneu(mode="v3turbo", backend="onnx", device="cpu",
