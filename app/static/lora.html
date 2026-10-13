@@ -8,9 +8,9 @@
 </head>
 <body>
 <main>
+  <nav id="siteNav" class="site-nav" aria-label="Pages"></nav>
   <header>
     <h1>LoRA voice training</h1>
-    <a href="/">Back to the test page</a>
   </header>
   <div class="panel">
     <label for="key">API key</label>
@@ -22,7 +22,12 @@
   <section id="listView">
     <h2 class="panel-title">New voice</h2>
     <div class="panel">
-      <div class="hint">You will read <span id="sentenceCount">14</span> short sentences, about one minute in total. Each sentence is its own clip, so a mistake only costs one retake. When every sentence is saved, the server trains a voice model for you on its GPU (a few minutes).</div>
+      <div class="toggle mode-toggle" role="radiogroup" aria-label="Training data">
+        <label><input type="radio" name="newMode" value="record" checked> Record sentences</label>
+        <label><input type="radio" name="newMode" value="import"> Import files</label>
+      </div>
+      <div class="hint mode-hint" data-mode="record">You will read <span id="sentenceCount">14</span> short sentences, about one minute in total. Each sentence is its own clip, so a mistake only costs one retake. When every sentence is saved, the server trains a voice model for you on its GPU (a few minutes).</div>
+      <div class="hint mode-hint" data-mode="import" hidden>Bring your own recordings of one speaker: audio files of one sentence each (1–20 s) and their transcripts. You check how they pair up before anything is uploaded. At least <span id="importMin">5</span> clips; a minute or more works better.</div>
       <div class="row">
         <div>
           <label for="newName">Name</label>
@@ -63,6 +68,38 @@
       <div id="recordedText" class="hint"></div>
     </div>
 
+    <div id="importer" class="panel" hidden>
+      <div class="hint">One speaker only, one sentence per audio file (1–20 s; split longer recordings first). Transcripts can be:</div>
+      <ul class="hint formats">
+        <li>one <code>.txt</code> per audio file with the same name (<code>clip01.wav</code> + <code>clip01.txt</code>),</li>
+        <li>one text file with one line per audio file, in file-name order, or</li>
+        <li>one <code>metadata.csv</code>-style file with lines <code>clip01.wav|transcript</code>.</li>
+      </ul>
+      <div class="row">
+        <div>
+          <label for="impAudio">Audio files</label>
+          <input id="impAudio" type="file" accept="audio/*,.wav,.flac,.ogg,.mp3,.m4a" multiple>
+        </div>
+        <div>
+          <label for="impText">Transcript file(s)</label>
+          <input id="impText" type="file" accept=".txt,.lab,.csv,.tsv,text/plain" multiple>
+        </div>
+      </div>
+      <div id="impSummary" class="status"></div>
+      <div id="impTableWrap" class="table-wrap" hidden>
+        <table id="impTable">
+          <thead><tr><th>#</th><th>Audio</th><th>Length</th><th>Transcript</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="actions">
+        <button id="impAdd" class="primary" disabled>Add clips</button>
+        <button id="impClear" disabled>Clear</button>
+      </div>
+      <div id="impStatus" class="status"></div>
+      <div class="hint">Write numbers, dates and abbreviations as they are spoken ("mười giờ", not "10:00"): the transcript must match the audio word for word.</div>
+    </div>
+
     <div id="recorder" class="panel">
       <div class="hint" id="sentencePos"></div>
       <p id="prompt" class="prompt" lang="vi"></p>
@@ -80,7 +117,7 @@
       <div class="hint">Read in your normal voice and pace, in a quiet room about 20 cm from the mic. Wait about half a second after pressing Record before you speak. Keys: <kbd>Space</kbd> record / stop, <kbd>Enter</kbd> save &amp; next, <kbd>R</kbd> retake, <kbd>←</kbd> <kbd>→</kbd> move between sentences.</div>
     </div>
 
-    <h2 class="panel-title">Sentences</h2>
+    <h2 class="panel-title" id="listTitle">Sentences</h2>
     <div class="panel">
       <ol id="sentences" class="sentence-list"></ol>
     </div>
@@ -123,6 +160,7 @@
     <audio id="takePlayer" hidden></audio>
   </section>
 </main>
+<script src="/static/nav.js"></script>
 <script src="/static/lora.js"></script>
 </body>
 </html>

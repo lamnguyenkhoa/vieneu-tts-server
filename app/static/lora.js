@@ -34,15 +34,20 @@ function setMsg(id, msg, isError = false) {
 const STATUS_LABEL = { recording: "Recording", queued: "Queued", training: "Training", ready: "Ready", failed: "Failed" };
 const EDITABLE = ["recording", "failed"];
 const BUSY = ["queued", "training"];
-let clipMin = 1, clipMax = 20;
+let clipMin = 1, clipMax = 20, importMin = 5, importMax = 1000, textMax = 500;
+const isImport = () => session?.mode === "import";
 
 // ── list view ───────────────────────────────────────────────────────────────
 async function loadList() {
   const ul = $("sessions");
   try {
-    const { data, gpu_available, clip_min_seconds, clip_max_seconds, script_sentences } = await (await api("/v1/lora/sessions")).json();
-    clipMin = clip_min_seconds; clipMax = clip_max_seconds;
-    $("sentenceCount").textContent = script_sentences;
+    const list = await (await api("/v1/lora/sessions")).json();
+    const { data, gpu_available } = list;
+    clipMin = list.clip_min_seconds; clipMax = list.clip_max_seconds;
+    importMin = list.import_min_clips ?? importMin; importMax = list.import_max_clips ?? importMax;
+    textMax = list.text_max_chars ?? textMax;
+    $("sentenceCount").textContent = list.script_sentences;
+    $("importMin").textContent = importMin;
     $("gpuWarning").hidden = gpu_available;
     ul.innerHTML = "";
     if (!data.length) { ul.innerHTML = '<li class="hint">None yet.</li>'; return; }
@@ -52,9 +57,11 @@ async function loadList() {
       label.textContent = [s.name, s.gender, s.description].filter(Boolean).join(" · ");
       const badge = document.createElement("span");
       badge.className = `badge ${s.status}`;
-      badge.textContent = s.status === "recording" ? `${s.sentences_recorded}/${s.sentences_total} recorded` : STATUS_LABEL[s.status];
+      badge.textContent = s.status !== "recording" ? STATUS_LABEL[s.status]
+        : s.mode === "import" ? `${s.sentences_recorded} clips imported`
+        : `${s.sentences_recorded}/${s.sentences_total} recorded`;
       const open = document.createElement("button");
-      open.textContent = s.status === "ready" ? "Open" : s.status === "recording" ? "Continue" : "Open";
+      open.textContent = s.status === "recording" ? "Continue" : "Open";
       open.addEventListener("click", () => { location.hash = s.id; });
       const left = document.createElement("span");
       left.className = "grow";
@@ -72,11 +79,23 @@ async function loadList() {
 }
 
 $("newName").addEventListener("input", () => { $("create").disabled = !$("newName").value.trim(); });
+const newMode = () => document.querySelector('input[name="newMode"]:checked').value;
+function renderNewMode() {
+  document.querySelectorAll(".mode-hint").forEach((el) => { el.hidden = el.dataset.mode !== newMode(); });
+  $("create").textContent = newMode() === "import" ? "Continue to import" : "Start recording";
+  store.set("lora-mode", newMode());
+}
+document.querySelectorAll('input[name="newMode"]').forEach((r) => {
+  r.checked = r.value === (store.get("lora-mode") || "record");
+  r.addEventListener("change", renderNewMode);
+});
+renderNewMode();
 $("create").addEventListener("click", async () => {
   $("create").disabled = true;
   try {
     const s = await (await api("/v1/lora/sessions", { method: "POST", json: {
       name: $("newName").value.trim(), gender: $("newGender").value, description: $("newDesc").value.trim(),
+      mode: newMode(),
     } })).json();
     $("newName").value = $("newDesc").value = "";
     setMsg("createStatus", "");
@@ -104,6 +123,7 @@ async function openSession(id) {
   const firstMissing = session.sentences.findIndex((x) => !x.clip);
   current = firstMissing >= 0 ? firstMissing : 0;
   discardTake();
+  clearImport();
   $("denoise").checked = session.denoise;
   setMsg("trainStatus", "");
   setMsg("recStatus", "");
@@ -119,10 +139,17 @@ function render() {
   $("sBadge").className = `badge ${s.status}`;
   $("sBadge").textContent = s.status === "queued" && s.queue_position > 1
     ? `Queued (#${s.queue_position})` : STATUS_LABEL[s.status];
-  $("recordedBar").style.width = `${(100 * s.sentences_recorded) / s.sentences_total}%`;
-  $("recordedText").textContent = `${s.sentences_recorded} of ${s.sentences_total} sentences recorded · ${s.recorded_seconds} s of speech (aim for about 60 s)`;
+  if (isImport()) {
+    $("recordedBar").style.width = `${Math.min(100, (100 * s.recorded_seconds) / 60)}%`;
+    $("recordedText").textContent = `${s.sentences_recorded} clips · ${s.recorded_seconds} s of speech (at least ${importMin} clips; a minute or more works better)`;
+  } else {
+    $("recordedBar").style.width = `${(100 * s.sentences_recorded) / s.sentences_total}%`;
+    $("recordedText").textContent = `${s.sentences_recorded} of ${s.sentences_total} sentences recorded · ${s.recorded_seconds} s of speech (aim for about 60 s)`;
+  }
+  $("listTitle").textContent = isImport() ? "Clips" : "Sentences";
 
-  $("recorder").hidden = !editable();
+  $("recorder").hidden = !editable() || isImport();
+  $("importer").hidden = !editable() || !isImport();
   renderRecorder();
   renderSentences();
   renderTraining();
@@ -130,7 +157,7 @@ function render() {
 }
 
 function renderRecorder() {
-  if (!session) return;
+  if (!session || isImport()) return;
   const x = session.sentences[current];
   $("sentencePos").textContent = `Sentence ${current + 1} of ${session.sentences.length}` +
     (x.clip ? ` · saved (${x.clip.seconds.toFixed(1)} s)` : "");
@@ -139,6 +166,7 @@ function renderRecorder() {
   $("recBtn").textContent = recording ? "Stop" : x.clip || hasTake ? "Record again" : "Record";
   $("recBtn").classList.toggle("recording", recording);
   $("playBtn").disabled = recording || !(hasTake || x.clip);
+  $("playBtn").textContent = playingIndex === current ? "Stop" : "Play";
   $("saveBtn").disabled = recording || !hasTake;
   $("retakeBtn").disabled = recording || !(hasTake || x.clip);
   $("prevBtn").disabled = recording || current === 0;
@@ -148,6 +176,10 @@ function renderRecorder() {
 function renderSentences() {
   const ol = $("sentences");
   ol.innerHTML = "";
+  if (!session.sentences.length) {
+    ol.innerHTML = '<li class="hint">No clips yet. Choose audio and transcript files above.</li>';
+    return;
+  }
   session.sentences.forEach((x, i) => {
     const li = document.createElement("li");
     li.classList.toggle("active", i === current && editable());
@@ -163,18 +195,30 @@ function renderSentences() {
     li.append(text, state);
     if (x.clip) {
       const play = document.createElement("button");
-      play.textContent = "Play";
-      play.addEventListener("click", (e) => { e.stopPropagation(); playSaved(i); });
+      play.textContent = playingIndex === i ? "Stop" : "Play";
+      play.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (playingIndex === i) stopPlayback(); else playSaved(i);
+      });
       li.append(play);
     }
-    if (editable()) li.addEventListener("click", () => select(i));
+    if (isImport() && editable()) {
+      const edit = document.createElement("button");
+      edit.textContent = "Edit text";
+      edit.addEventListener("click", () => editText(i));
+      const del = document.createElement("button");
+      del.textContent = "Remove";
+      del.addEventListener("click", () => removeItem(i));
+      li.append(edit, del);
+    }
+    if (editable() && !isImport()) li.addEventListener("click", () => select(i));
     ol.append(li);
   });
 }
 
 function renderTraining() {
   const s = session;
-  const complete = s.sentences_recorded === s.sentences_total;
+  const complete = isImport() ? s.sentences_recorded >= importMin : s.sentences_recorded === s.sentences_total;
   $("trainBtn").hidden = !editable();
   $("denoise").parentElement.hidden = !editable();
   $("trainBtn").disabled = !complete || recording;
@@ -182,7 +226,8 @@ function renderTraining() {
   $("trainHint").textContent = s.status === "ready"
     ? "Training finished. The voice is in the voice list of the test page; it runs on the GPU."
     : !editable() ? "Training runs on the server's GPU. You can leave this page and come back later."
-    : complete ? "Every sentence is saved. Training runs on the server's GPU and takes a few minutes; you can leave this page and come back later."
+    : complete ? `${isImport() ? "Enough clips imported" : "Every sentence is saved"}. Training runs on the server's GPU and takes a few minutes; you can leave this page and come back later.`
+    : isImport() ? `Import at least ${importMin} clips to start training (${importMin - s.sentences_recorded} more).`
     : `Record all ${s.sentences_total} sentences to start training (${s.sentences_total - s.sentences_recorded} left).`;
 
   const p = s.progress || {};
@@ -242,7 +287,7 @@ function schedulePoll() {
 }
 
 function select(i) {
-  if (recording || i < 0 || i >= session.sentences.length) return;
+  if (isImport() || recording || i < 0 || i >= session.sentences.length) return;
   if (take && take.index !== i) discardTake();
   current = i;
   setMsg("recStatus", "");
@@ -311,7 +356,7 @@ function drawLevel() {
 }
 
 async function startRecording() {
-  if (!editable() || recording) return;
+  if (!editable() || isImport() || recording) return;
   try {
     await ensureMic();
     if (mic.ctx.state === "suspended") await mic.ctx.resume();
@@ -319,6 +364,7 @@ async function startRecording() {
     setMsg("recStatus", `Microphone unavailable: ${e.message}`, true);
     return;
   }
+  stopPlayback();  // or the speakers would end up in the new take
   discardTake();
   chunks = [];
   recording = true;
@@ -378,13 +424,33 @@ function wavFromFloat(pcm, rate) {
   return new Blob([buf], { type: "audio/wav" });
 }
 
+// ── playback: one player for takes and saved clips; its Play button turns into Stop ──
 let savedUrl = null;
+let playingIndex = null;  // sentence whose take / clip is playing now
+let pendingIndex = null;  // sentence the next "play" event belongs to
+
+function onPlayback() {
+  if (!session) return;
+  renderRecorder();
+  renderSentences();
+}
+// Changing src fires "pause" for the old clip before "play" of the new one, so the index is taken on "play".
+$("takePlayer").addEventListener("play", () => { playingIndex = pendingIndex; onPlayback(); });
+$("takePlayer").addEventListener("pause", () => { playingIndex = null; onPlayback(); });
+$("takePlayer").addEventListener("ended", () => { playingIndex = null; onPlayback(); });
+
+function stopPlayback() {
+  pendingIndex = null;
+  $("takePlayer").pause();
+}
+
 async function playSaved(i) {
   try {
     const blob = await (await api(`/v1/lora/sessions/${session.id}/clips/${i}`)).blob();
     if (savedUrl) URL.revokeObjectURL(savedUrl);
     savedUrl = URL.createObjectURL(blob);
     $("takePlayer").src = savedUrl;
+    pendingIndex = i;
     await $("takePlayer").play();
   } catch (e) {
     setMsg("recStatus", `Could not play the clip: ${e.message}`, true);
@@ -392,8 +458,11 @@ async function playSaved(i) {
 }
 
 function play() {
-  if (take && take.index === current) {
+  if (playingIndex === current) {
+    stopPlayback();
+  } else if (take && take.index === current) {
     $("takePlayer").src = take.url;
+    pendingIndex = current;
     $("takePlayer").play();
   } else if (session.sentences[current].clip) {
     playSaved(current);
@@ -432,7 +501,7 @@ $("saveBtn").addEventListener("click", saveTake);
 $("retakeBtn").addEventListener("click", startRecording);
 
 document.addEventListener("keydown", (e) => {
-  if ($("sessionView").hidden || !editable() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if ($("sessionView").hidden || !editable() || isImport() || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.closest("input, textarea, select")) return;
   if (e.key === " ") {
     e.preventDefault();  // no page scroll
@@ -449,6 +518,250 @@ document.addEventListener("keydown", (e) => {
     select(current + 1);
   }
 });
+
+// ── import mode: audio files + transcripts, paired and checked before upload ──
+let impRows = [];   // [{name, seconds, blob, text, error}]
+let impToken = 0;   // a newer file choice cancels an older one that is still decoding
+let importing = false;
+const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+const stemOf = (name) => name.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "").toLowerCase();
+const oneLine = (s) => s.replace(/\s+/g, " ").trim();
+
+async function readText(file) {
+  return (await file.text()).replace(/^﻿/, "");
+}
+
+// Transcripts for `audio` (Files sorted by name) -> {texts, note} or {error}.
+async function pairTranscripts(audio, textFiles) {
+  textFiles = [...textFiles].sort((a, b) => natural(a.name, b.name));
+  if (textFiles.length === 1) {
+    const f = textFiles[0];
+    const lines = (await readText(f)).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length && lines.every((l) => l.includes("|"))) {
+      // metadata.csv style: name|text (a "file_name|text" header line is skipped)
+      const map = new Map();
+      for (const l of lines) {
+        const [name, text = ""] = l.split("|");
+        if (/^file_?name$/i.test(name.trim())) continue;
+        map.set(stemOf(name.trim()), oneLine(text));
+      }
+      const missing = audio.filter((a) => !map.has(stemOf(a.name))).map((a) => a.name);
+      if (missing.length) {
+        const more = missing.length > 5 ? ` and ${missing.length - 5} more` : "";
+        return { error: `${f.name} has no line for ${missing.slice(0, 5).join(", ")}${more}.` };
+      }
+      if (map.size !== audio.length) {
+        return { error: `${f.name} lists ${map.size} files but you chose ${audio.length} audio files. The numbers must match.` };
+      }
+      return { texts: audio.map((a) => map.get(stemOf(a.name))), note: `Matched by file name from ${f.name}.` };
+    }
+    if (audio.length === 1) return { texts: [oneLine(lines.join(" "))], note: "" };
+    if (lines.length !== audio.length) {
+      return { error: `${f.name} has ${lines.length} non-empty lines but you chose ${audio.length} audio files. Use one line per audio file.` };
+    }
+    return { texts: lines.map(oneLine), note: "Line 1 goes with the first audio file in name order, and so on. Check the pairs below." };
+  }
+  if (textFiles.length !== audio.length) {
+    return { error: `You chose ${audio.length} audio files and ${textFiles.length} transcript files. The numbers must match.` };
+  }
+  const byStem = new Map(textFiles.map((f) => [stemOf(f.name), f]));
+  const named = byStem.size === textFiles.length && audio.every((a) => byStem.has(stemOf(a.name)));
+  const pairs = named ? audio.map((a) => byStem.get(stemOf(a.name))) : textFiles;
+  const texts = await Promise.all(pairs.map(async (f) => oneLine(await readText(f))));
+  return { texts, note: named ? "Matched by file name." : "The file names do not match, so files are paired in name order. Check the pairs below." };
+}
+
+// Decode anything the browser plays (wav, mp3, m4a…) to mono; it is uploaded as 16-bit WAV.
+async function decodeClip(ctx, file) {
+  const audio = await ctx.decodeAudioData(await file.arrayBuffer());
+  const n = audio.length, pcm = new Float32Array(n);
+  for (let c = 0; c < audio.numberOfChannels; c++) {
+    const ch = audio.getChannelData(c);
+    for (let i = 0; i < n; i++) pcm[i] += ch[i] / audio.numberOfChannels;
+  }
+  let peak = 0;
+  for (let i = 0; i < n; i++) { const a = Math.abs(pcm[i]); if (a > peak) peak = a; }
+  return { pcm, rate: audio.sampleRate, seconds: audio.duration, peak };
+}
+
+async function checkImport() {
+  const token = ++impToken;
+  const audio = [...$("impAudio").files].sort((a, b) => natural(a.name, b.name));
+  const textFiles = [...$("impText").files];
+  impRows = [];
+  renderImport();
+  setMsg("impStatus", "");
+  $("impClear").disabled = !audio.length && !textFiles.length;
+  if (!audio.length || !textFiles.length) {
+    setMsg("impSummary", !audio.length && !textFiles.length ? ""
+      : !audio.length ? "Now choose the audio files." : "Now choose the transcript file(s).");
+    return;
+  }
+  const room = importMax - session.sentences.length;
+  if (audio.length > room) {
+    setMsg("impSummary", `This voice can take ${room} more clips; you chose ${audio.length}.`, true);
+    return;
+  }
+  let paired;
+  try {
+    paired = await pairTranscripts(audio, textFiles);
+  } catch (e) {
+    paired = { error: `Could not read the transcripts: ${e.message}` };
+  }
+  if (token !== impToken) return;
+  if (paired.error) { setMsg("impSummary", paired.error, true); return; }
+
+  const rows = [];
+  const ctx = new AudioContext();
+  try {
+    for (let i = 0; i < audio.length; i++) {
+      if (token !== impToken) return;
+      setMsg("impSummary", `Checking audio ${i + 1} of ${audio.length}…`);
+      const row = { name: audio[i].name, text: paired.texts[i], seconds: null, blob: null, error: null };
+      try {
+        const d = await decodeClip(ctx, audio[i]);
+        row.seconds = d.seconds;
+        if (d.seconds < clipMin) row.error = `Too short (${d.seconds.toFixed(1)} s).`;
+        else if (d.seconds > clipMax) row.error = `Too long (${d.seconds.toFixed(1)} s); split it into clips of at most ${clipMax} s.`;
+        else if (d.peak < 0.01) row.error = "Silent.";
+        else row.blob = wavFromFloat(d.pcm, d.rate);
+      } catch {
+        row.error = "This browser cannot decode the file.";
+      }
+      rows.push(row);
+    }
+  } finally {
+    ctx.close().catch(() => {});
+  }
+  if (token !== impToken) return;
+  impRows = rows;
+  renderImport(paired.note);
+}
+
+function rowProblem(r) {
+  if (r.error) return r.error;
+  if (!r.text.trim()) return "No transcript.";
+  if (r.text.length > textMax) return `Transcript longer than ${textMax} characters.`;
+  return null;
+}
+
+function renderImport(note) {
+  const tbody = $("impTable").tBodies[0];
+  tbody.innerHTML = "";
+  $("impTableWrap").hidden = !impRows.length;
+  impRows.forEach((r, i) => {
+    const tr = tbody.insertRow();
+    tr.insertCell().textContent = String(i + 1);
+    tr.insertCell().textContent = r.name;
+    tr.insertCell().textContent = r.seconds == null ? "–" : `${r.seconds.toFixed(1)} s`;
+    const cell = tr.insertCell();
+    const ta = document.createElement("textarea");
+    ta.rows = 2;
+    ta.lang = "vi";
+    ta.value = r.text;
+    const msg = document.createElement("span");
+    const update = () => {
+      r.text = ta.value;
+      const problem = rowProblem(r);
+      tr.classList.toggle("bad", !!problem);
+      msg.className = problem ? "row-error" : "row-warn";
+      msg.textContent = problem || (/\d/.test(r.text) ? "Contains digits: write numbers out as they are spoken." : "");
+      updateImportButton();
+    };
+    ta.addEventListener("input", update);
+    cell.append(ta, msg);
+    update();
+  });
+  if (impRows.length) {
+    const usable = impRows.filter((r) => !rowProblem(r));
+    const seconds = usable.reduce((a, r) => a + r.seconds, 0);
+    setMsg("impSummary", `${impRows.length} pairs, ${seconds.toFixed(0)} s of usable speech. ${note || ""}`.trim());
+  }
+  updateImportButton();
+}
+
+function updateImportButton() {
+  const ok = impRows.filter((r) => !rowProblem(r)).length;
+  const bad = impRows.length - ok;
+  $("impAdd").disabled = !ok || importing;
+  $("impAdd").textContent = ok
+    ? `Add ${ok} clip${ok === 1 ? "" : "s"}${bad ? ` (skip ${bad} with problems)` : ""}`
+    : "Add clips";
+}
+
+function clearImport() {
+  impToken++;
+  impRows = [];
+  $("impAudio").value = $("impText").value = "";
+  setMsg("impSummary", "");
+  setMsg("impStatus", "");
+  $("impClear").disabled = true;
+  renderImport();
+}
+
+async function addImported() {
+  const todo = impRows.filter((r) => !rowProblem(r));
+  if (!todo.length || importing) return;
+  importing = true;
+  updateImportButton();
+  $("impClear").disabled = true;
+  let failed = 0;
+  for (let i = 0; i < todo.length; i++) {
+    const r = todo[i];
+    setMsg("impStatus", `Adding ${i + 1} of ${todo.length}: ${r.name}…`);
+    const form = new FormData();
+    form.append("file", r.blob, r.name.replace(/\.[^.]+$/, "") + ".wav");
+    form.append("text", r.text);
+    try {
+      session = await (await api(`/v1/lora/sessions/${session.id}/clips`, { method: "POST", form })).json();
+      r.added = true;
+    } catch (e) {
+      r.error = e.message;
+      failed++;
+      if (/at most|can no longer change/.test(e.message)) break;  // nothing after this one can succeed
+    }
+  }
+  importing = false;
+  const added = todo.filter((r) => r.added).length;
+  impRows = impRows.filter((r) => !r.added);
+  render();
+  if (impRows.length) {
+    renderImport();
+    $("impClear").disabled = false;
+  } else {
+    clearImport();
+  }
+  setMsg("impStatus", failed
+    ? `Added ${added} clip${added === 1 ? "" : "s"}; ${failed} failed (marked in the list above).`
+    : `Added ${added} clip${added === 1 ? "" : "s"}.`, failed > 0);
+}
+
+$("impAudio").addEventListener("change", checkImport);
+$("impText").addEventListener("change", checkImport);
+$("impAdd").addEventListener("click", addImported);
+$("impClear").addEventListener("click", clearImport);
+
+async function editText(i) {
+  const text = prompt(`Transcript of clip ${i + 1}:`, session.sentences[i].text);
+  if (text == null || oneLine(text) === session.sentences[i].text) return;
+  try {
+    session = await (await api(`/v1/lora/sessions/${session.id}/sentences/${i}`, { method: "PATCH", json: { text } })).json();
+    render();
+  } catch (e) {
+    alert(`Could not change the transcript: ${e.message}`);
+  }
+}
+
+async function removeItem(i) {
+  if (!confirm(`Remove clip ${i + 1} ("${session.sentences[i].text.slice(0, 60)}")?`)) return;
+  stopPlayback();
+  try {
+    session = await (await api(`/v1/lora/sessions/${session.id}/clips/${i}`, { method: "DELETE" })).json();
+    render();
+  } catch (e) {
+    alert(`Could not remove the clip: ${e.message}`);
+  }
+}
 
 // ── training ────────────────────────────────────────────────────────────────
 $("trainBtn").addEventListener("click", async () => {
@@ -506,6 +819,7 @@ $("back").addEventListener("click", () => { location.hash = ""; });
 function route() {
   const id = location.hash.slice(1);
   if (recording) { recording = false; clearInterval(recTimer); chunks = []; }
+  stopPlayback();
   clearTimeout(pollTimer);
   $("listView").hidden = !!id;
   $("sessionView").hidden = !id;

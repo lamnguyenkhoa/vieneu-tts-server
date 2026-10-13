@@ -75,7 +75,6 @@ th { color: var(--muted); font-weight: 600; }
 .code[hidden] { display: none; }
 .code pre { margin: 0; padding: 12px; overflow-x: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; }
 .code .copy { position: absolute; top: 8px; right: 8px; padding: 3px 10px; font-size: 12px; }
-header a { font-size: 14px; }
 .grow { flex: 1 1 auto; min-width: 0; }
 .nowrap { white-space: nowrap; }
 .spacer { flex: 1; }
@@ -106,4 +105,20 @@ button.danger { color: var(--error); border-color: var(--error); }
 .voice-list .grow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .log { max-height: 240px; overflow: auto; margin: 8px 0 0; padding: 8px; font: 12px/1.4 ui-monospace, Consolas, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; }
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 12px; }
-.header-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 14px; }
+.mode-toggle { margin-bottom: 12px; }
+.formats { margin: 4px 0 0; padding-left: 20px; }
+.table-wrap { margin-top: 12px; max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.table-wrap table { border: 0; }
+.table-wrap th { position: sticky; top: 0; background: var(--panel); }
+#impTable td:nth-child(2) { overflow-wrap: anywhere; min-width: 90px; }
+#impTable td:nth-child(4) { width: 60%; }
+#impTable textarea { min-height: 0; height: auto; padding: 4px 6px; font-size: 14px; }
+#impTable tr.bad td { color: var(--error); }
+#impTable .row-error { display: block; font-size: 12px; color: var(--error); }
+#impTable .row-warn { display: block; font-size: 12px; color: var(--cpu); }
+.sentence-list li .item-actions { white-space: nowrap; }
+.site-nav { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.site-nav a { padding: 4px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+.site-nav a:hover { color: var(--text); background: var(--panel); }
+.site-nav a[aria-current="page"] { color: var(--accent); font-weight: 600; background: var(--panel); }
+.docs.guide { margin-top: 0; }

@@ -8,12 +8,10 @@
 </head>
 <body>
 <main>
+  <nav id="siteNav" class="site-nav" aria-label="Pages"></nav>
   <header>
     <h1>VieNeu TTS Test</h1>
-    <span class="header-right">
-      <a href="/lora">Train a LoRA voice</a>
-      <span id="device" title="Device the next request will run on">checking…</span>
-    </span>
+    <span id="device" title="Device the next request will run on">checking…</span>
   </header>
   <div class="panel">
     <label for="key">API key</label>
@@ -53,6 +51,7 @@
     <div id="status"></div>
     <audio id="player" controls hidden></audio>
   </div>
+  <p class="hint">To call this server from another service, see the <a href="/guide">API guide</a>. Its code samples use the key, voice and device chosen here.</p>
 
   <h2 class="panel-title">Clone a voice</h2>
   <div class="panel">
@@ -102,189 +101,8 @@
   <div class="panel">
     <div class="hint">For a closer match than cloning, read about one minute of sentences on the <a href="/lora">LoRA page</a>; the server then fine-tunes the model on your voice. LoRA voices appear in the voice list marked "LoRA" and run on the GPU only.</div>
   </div>
-
-  <section class="docs">
-    <h2>Calling the API from another service</h2>
-    <p>Base URL: <code class="base">{{BASE}}</code>. The caller must be able to reach this address. By default the server listens only on <code>127.0.0.1</code>. To accept requests from other machines, set <code>HOST=0.0.0.0</code> in <code>.env</code>, and also set <code>TTS_API_KEY</code>.</p>
-
-    <h3>Authentication</h3>
-    <p>If the server has <code>TTS_API_KEY</code> set, send it on every request as <code>Authorization: Bearer &lt;key&gt;</code>. A missing or wrong key returns 401.</p>
-
-    <h3>Endpoints</h3>
-    <table>
-      <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
-      <tbody>
-        <tr><td>GET</td><td><code>/v1/voices</code></td><td>Lists the voices. Pass a <code>data[].id</code> as <code>voice</code>. If you leave <code>voice</code> out, the server uses <code>default</code>.</td></tr>
-        <tr><td>POST</td><td><code>/v1/audio/speech</code></td><td>Turns text into audio.</td></tr>
-        <tr><td>POST</td><td><code>/v1/voices</code></td><td>Clones a voice. Multipart form: <code>name</code> (1–40 letters, digits, spaces or <code>- _ . ( )</code>), <code>file</code> (WAV, FLAC or OGG, 3–8 s, up to 5 MB), optional <code>denoise</code> (default true), <code>gender</code>, <code>description</code>. The new voice is usable right away by its name.</td></tr>
-        <tr><td>DELETE</td><td><code>/v1/voices/{id}</code></td><td>Removes a cloned or LoRA voice. Built-in voices cannot be removed (403).</td></tr>
-        <tr><td>GET, POST</td><td><code>/v1/lora/sessions</code></td><td>Lists LoRA recording sessions, or starts one: JSON <code>{"name", "gender", "description"}</code>. The session holds the sentences to read.</td></tr>
-        <tr><td>PUT</td><td><code>/v1/lora/sessions/{id}/clips/{i}</code></td><td>Saves (or replaces) the recording of sentence <code>i</code>. Multipart <code>file</code>: WAV, FLAC or OGG, 1–20 s.</td></tr>
-        <tr><td>POST</td><td><code>/v1/lora/sessions/{id}/train</code></td><td>Queues training once every sentence is recorded. Poll <code>GET /v1/lora/sessions/{id}</code> for <code>status</code> and <code>progress</code>; at <code>"ready"</code> the voice is in <code>/v1/voices</code> with <code>"lora": true</code>.</td></tr>
-        <tr><td>GET</td><td><code>/health</code></td><td>Status and device (no key needed). Returns 503 while the model loads.</td></tr>
-      </tbody>
-    </table>
-
-    <h3>Request body for <code>POST /v1/audio/speech</code></h3>
-    <table>
-      <thead><tr><th>Field</th><th>Required</th><th>Meaning</th></tr></thead>
-      <tbody>
-        <tr><td><code>input</code></td><td>yes</td><td>The text to read, up to 20,000 characters.</td></tr>
-        <tr><td><code>voice</code></td><td>no</td><td>A voice id from <code>/v1/voices</code>. Leave it out to use the default voice.</td></tr>
-        <tr><td><code>response_format</code></td><td>no</td><td><code>"wav"</code> (default) returns one complete file. <code>"pcm"</code> streams raw audio as it is generated.</td></tr>
-        <tr><td><code>device</code></td><td>no</td><td><code>"gpu"</code> or <code>"cpu"</code>. Leave it out to use the server default (<code>TTS_DEFAULT_DEVICE</code>). LoRA voices always run on the GPU and return 400 for <code>"cpu"</code>. The first request for a device that is not loaded yet waits while it loads. The response header <code>X-Device</code> says which device ran the request.</td></tr>
-        <tr><td><code>model</code></td><td>no</td><td>Accepted for OpenAI compatibility (<code>"vieneu-v3-turbo"</code>).</td></tr>
-      </tbody>
-    </table>
-    <p>The server reads text exactly as written. It does not convert numbers, dates, times or licence plates to words, so write them out (for example "mười giờ" instead of "10:00").</p>
-
-    <h3>Which method to use</h3>
-    <p><strong>File (<code>wav</code>):</strong> the response arrives after the whole text has been synthesized, as a normal WAV file (48 kHz, mono, 16-bit). Use it when you need to save or send a file.</p>
-    <p><strong>Stream (<code>pcm</code>):</strong> audio starts arriving after about 0.1 s and keeps coming while it is generated. Use it to play speech with the least delay. Both methods take the same total time; only the wait for the first sound differs.</p>
-    <p>The stream is raw PCM: 16-bit signed little-endian, mono. The sample rate is in the <code>X-Sample-Rate</code> response header (48000). The stream has no file header, so to save it as a file, add a 44-byte WAV header with that rate. A chunk can end halfway through a 2-byte sample; if so, carry the odd byte into the next chunk.</p>
-
-    <h3>File method</h3>
-    <div class="tabs" data-group="file">
-      <button data-tab="curl" class="active">curl</button><button data-tab="py">Python</button><button data-tab="js">JavaScript</button>
-    </div>
-    <div class="code" data-group="file" data-tab="curl"><button class="copy">Copy</button><pre>curl -X POST {{BASE}}/v1/audio/speech \
-  -H "Authorization: Bearer {{KEY}}" \
-  -H "Content-Type: application/json" \
-  -d '{"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "wav", "device": "{{DEVICE}}"}' \
-  --output speech.wav</pre></div>
-    <div class="code" data-group="file" data-tab="py" hidden><button class="copy">Copy</button><pre>import requests
-
-res = requests.post(
-    "{{BASE}}/v1/audio/speech",
-    headers={"Authorization": "Bearer {{KEY}}"},
-    json={"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "wav", "device": "{{DEVICE}}"},
-    timeout=120,
-)
-if not res.ok:
-    raise RuntimeError(res.json()["error"]["message"])
-with open("speech.wav", "wb") as f:
-    f.write(res.content)</pre></div>
-    <div class="code" data-group="file" data-tab="js" hidden><button class="copy">Copy</button><pre>// Node 18+ or browser
-const res = await fetch("{{BASE}}/v1/audio/speech", {
-  method: "POST",
-  headers: { "Authorization": "Bearer {{KEY}}", "Content-Type": "application/json" },
-  body: JSON.stringify({ voice: "{{VOICE}}", input: "Xin chào, đây là thông báo thử.", response_format: "wav", device: "{{DEVICE}}" }),
-});
-if (!res.ok) throw new Error((await res.json()).error.message);
-const wav = new Uint8Array(await res.arrayBuffer());
-// Node:    (await import("node:fs")).writeFileSync("speech.wav", wav);
-// Browser: new Audio(URL.createObjectURL(new Blob([wav], { type: "audio/wav" }))).play();</pre></div>
-
-    <h3>Stream method</h3>
-    <div class="tabs" data-group="stream">
-      <button data-tab="curl" class="active">curl</button><button data-tab="py">Python</button><button data-tab="js">Browser</button>
-    </div>
-    <div class="code" data-group="stream" data-tab="curl"><button class="copy">Copy</button><pre># Raw PCM to a file (-N turns off buffering so bytes arrive as they are generated)
-curl -N -X POST {{BASE}}/v1/audio/speech \
-  -H "Authorization: Bearer {{KEY}}" \
-  -H "Content-Type: application/json" \
-  -d '{"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "pcm", "device": "{{DEVICE}}"}' \
-  --output speech.pcm
-
-# Or play it live with ffplay (part of ffmpeg): replace the last line with
-#   --output - | ffplay -f s16le -ar 48000 -ch_layout mono -nodisp -autoexit -</pre></div>
-    <div class="code" data-group="stream" data-tab="py" hidden><button class="copy">Copy</button><pre>import wave
-import requests
-
-with requests.post(
-    "{{BASE}}/v1/audio/speech",
-    headers={"Authorization": "Bearer {{KEY}}"},
-    json={"voice": "{{VOICE}}", "input": "Xin chào, đây là thông báo thử.", "response_format": "pcm", "device": "{{DEVICE}}"},
-    stream=True,
-    timeout=120,
-) as res:
-    if not res.ok:
-        raise RuntimeError(res.json()["error"]["message"])
-    rate = int(res.headers.get("X-Sample-Rate", 48000))
-    with wave.open("speech.wav", "wb") as out:  # wave writes the WAV header for you
-        out.setnchannels(1)
-        out.setsampwidth(2)
-        out.setframerate(rate)
-        for chunk in res.iter_content(chunk_size=4096):
-            # Play or forward each chunk here as it arrives (sounddevice, a websocket...).
-            out.writeframes(chunk)</pre></div>
-    <div class="code" data-group="stream" data-tab="js" hidden><button class="copy">Copy</button><pre>// Plays the stream as it arrives with the Web Audio API (no library).
-// A page on another domain needs that domain in ALLOWED_ORIGINS on this server.
-async function streamSpeech(input, voice) {
-  const res = await fetch("{{BASE}}/v1/audio/speech", {
-    method: "POST",
-    headers: { "Authorization": "Bearer {{KEY}}", "Content-Type": "application/json" },
-    body: JSON.stringify({ input, voice, response_format: "pcm", device: "{{DEVICE}}" }),
-  });
-  if (!res.ok) throw new Error((await res.json()).error.message);
-  const rate = Number(res.headers.get("X-Sample-Rate")) || 48000;
-  const ctx = new AudioContext();
-  const reader = res.body.getReader();
-  let nextTime = 0, carry = null;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    let bytes = value;
-    if (carry !== null) { bytes = new Uint8Array([carry, ...value]); carry = null; }
-    if (bytes.length % 2) { carry = bytes[bytes.length - 1]; bytes = bytes.subarray(0, -1); }
-    if (!bytes.length) continue;
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const buffer = ctx.createBuffer(1, bytes.length / 2, rate);
-    const ch = buffer.getChannelData(0);
-    for (let i = 0; i &lt; ch.length; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(ctx.destination);
-    if (nextTime &lt; ctx.currentTime) nextTime = ctx.currentTime + 0.12;  // small buffer against gaps
-    src.start(nextTime);
-    nextTime += buffer.duration;
-  }
-  return ctx;  // ctx.close() stops playback; reader.cancel() also tells the server to stop generating
-}</pre></div>
-
-    <h3>Clone a voice</h3>
-    <div class="tabs" data-group="clone">
-      <button data-tab="curl" class="active">curl</button><button data-tab="py">Python</button>
-    </div>
-    <div class="code" data-group="clone" data-tab="curl"><button class="copy">Copy</button><pre>curl -X POST {{BASE}}/v1/voices \
-  -H "Authorization: Bearer {{KEY}}" \
-  -F "name=My voice" \
-  -F "file=@reference.wav" \
-  -F "gender=female"
-
-# Remove it again
-curl -X DELETE "{{BASE}}/v1/voices/My%20voice" -H "Authorization: Bearer {{KEY}}"</pre></div>
-    <div class="code" data-group="clone" data-tab="py" hidden><button class="copy">Copy</button><pre>import requests
-
-with open("reference.wav", "rb") as f:
-    res = requests.post(
-        "{{BASE}}/v1/voices",
-        headers={"Authorization": "Bearer {{KEY}}"},
-        data={"name": "My voice", "gender": "female", "denoise": "true"},
-        files={"file": ("reference.wav", f, "audio/wav")},
-        timeout=120,
-    )
-if not res.ok:
-    raise RuntimeError(res.json()["error"]["message"])
-print(res.json()["id"])  # pass this as "voice" to /v1/audio/speech</pre></div>
-
-    <h3>Errors</h3>
-    <p>Errors are JSON in OpenAI's format: <code>{"error": {"message": "...", "type": "invalid_request_error", "code": 400}}</code>.</p>
-    <table>
-      <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
-      <tbody>
-        <tr><td>400</td><td>Bad request: empty <code>input</code>, unknown <code>voice</code>, or unsupported <code>response_format</code>.</td></tr>
-        <tr><td>401</td><td>Missing or wrong API key.</td></tr>
-        <tr><td>404</td><td>Deleting a cloned voice that does not exist.</td></tr>
-        <tr><td>409</td><td>Cloning with a name that is already taken.</td></tr>
-        <tr><td>413</td><td>Clone clip larger than 5 MB.</td></tr>
-        <tr><td>429</td><td>Server busy. Retry after the number of seconds in the <code>Retry-After</code> header.</td></tr>
-        <tr><td>503</td><td>Model still loading.</td></tr>
-      </tbody>
-    </table>
-    <p class="hint">The code samples fill in this page's address, the voice and device selected above, and the key you typed (shown as <code>&lt;your-key&gt;</code> when the key box is empty).</p>
-  </section>
 </main>
+<script src="/static/nav.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -13,8 +13,8 @@ make_voice.py), with settings for about a minute of speech:
    (the mean speaker embedding of the clips, no reference codes, as the LoRA was trained).
 
 Progress goes to ``<session>/progress.json``; everything printed goes to ``train.log``.
-Settings (environment): TTS_LORA_EPOCHS (25), TTS_LORA_LR (2e-4), TTS_LORA_RANK (16),
-TTS_LORA_BATCH (4).
+Settings (environment): TTS_LORA_EPOCHS (empty = auto, see ``auto_epochs``), TTS_LORA_LR (2e-4),
+TTS_LORA_RANK (16), TTS_LORA_BATCH (4).
 """
 from __future__ import annotations
 
@@ -124,6 +124,12 @@ def prepare(session: dict, sdir: Path, progress: Progress) -> tuple[list[dict], 
     return rows, np.mean(np.stack(embs), axis=0)
 
 
+def auto_epochs(n_rows: int) -> float:
+    """About 350 clip passes, between 3 epochs (upstream's default, for 100+ clips) and 25 (a one-minute
+    recording of 14 sentences, about 100 steps at batch 4)."""
+    return max(3.0, min(25.0, 350 / max(1, n_rows)))
+
+
 def train(rows: list[dict], out_dir: Path, progress: Progress) -> None:
     """upstream train_lora.py with its defaults, tuned for a handful of clips (no eval split, no checkpoints)."""
     import torch
@@ -136,7 +142,7 @@ def train(rows: list[dict], out_dir: Path, progress: Progress) -> None:
 
     if not torch.cuda.is_available():
         raise RuntimeError("LoRA training needs a CUDA GPU.")
-    epochs = _env("TTS_LORA_EPOCHS", 25, float)
+    epochs = _env("TTS_LORA_EPOCHS", 0, float) or auto_epochs(len(rows))
     lr = _env("TTS_LORA_LR", 2e-4, float)
     rank = _env("TTS_LORA_RANK", 16, int)
     batch_size = _env("TTS_LORA_BATCH", 4, int)

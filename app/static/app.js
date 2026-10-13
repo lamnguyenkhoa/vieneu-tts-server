@@ -43,7 +43,6 @@ async function loadVoices(select) {
     if (select) store.set("tts-voice", select);
     renderCustomVoices(data.filter((v) => v.custom && !v.lora));
     setStatus(`${data.length} voices loaded.`);
-    fillDocs();
   } catch (e) {
     $("voice").innerHTML = '<option value="">(default)</option>';
     setStatus(`Could not load voices: ${e.message}`, true);
@@ -84,7 +83,6 @@ async function loadDevice() {
       el.textContent = h.device || h.backend || "unknown device";
       el.className = kind;
       el.title = "Restart the server to enable GPU/CPU switching";
-      fillDocs();
       return;
     }
     devices = h.devices;
@@ -101,7 +99,6 @@ async function loadDevice() {
       if (pick) pick.checked = true;
     }
     renderDevice();
-    fillDocs();
   } catch (e) {
     el.textContent = `server: ${e.message}`;
     el.className = "";
@@ -111,7 +108,6 @@ async function loadDevice() {
 deviceRadios.forEach((r) => r.addEventListener("change", () => {
   store.set("tts-device", selectedDevice());
   renderDevice();
-  fillDocs();
 }));
 
 // ── playback ────────────────────────────────────────────────────────────────
@@ -392,7 +388,6 @@ async function cloneVoice() {
     clip = null;
     $("clipPlayer").hidden = true;
     await loadVoices(v.id);
-    fillDocs();
   } catch (e) {
     setCloneStatus(`Clone failed: ${e.message}`, true);
   } finally {
@@ -431,46 +426,5 @@ async function deleteVoice(id, btn) {
   }
 }
 
-// ── API docs: fill code samples, tabs, copy ─────────────────────────────────
-document.querySelectorAll(".docs pre, .docs .base").forEach((el) => { el.dataset.tpl = el.textContent; });
-
-function fillDocs() {
-  const vals = {
-    BASE: location.origin,
-    KEY: $("key").value.trim() || "<your-key>",
-    VOICE: $("voice").value || "Mai Anh",
-    DEVICE: selectedDevice() || "gpu",
-  };
-  document.querySelectorAll("[data-tpl]").forEach((el) => {
-    el.textContent = el.dataset.tpl.replace(/\{\{(\w+)\}\}/g, (_, k) => vals[k] ?? "");
-  });
-}
-$("key").addEventListener("input", fillDocs);
-$("voice").addEventListener("change", fillDocs);
-
-document.querySelectorAll(".tabs").forEach((tabs) => {
-  tabs.addEventListener("click", (e) => {
-    const tab = e.target.dataset.tab;
-    if (!tab) return;
-    tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === e.target));
-    document.querySelectorAll(`.code[data-group="${tabs.dataset.group}"]`).forEach((c) => {
-      c.hidden = c.dataset.tab !== tab;
-    });
-  });
-});
-
-document.querySelectorAll(".code .copy").forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(btn.nextElementSibling.textContent);
-      btn.textContent = "Copied";
-    } catch {
-      btn.textContent = "Copy failed";
-    }
-    setTimeout(() => { btn.textContent = "Copy"; }, 1500);
-  });
-});
-
-fillDocs();
 loadDevice();
 loadVoices();

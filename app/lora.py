@@ -55,6 +55,12 @@ CLIP_MIN_SECONDS = 1.0
 CLIP_MAX_SECONDS = 20.0  # the training pipeline skips longer clips
 CLIP_MAX_BYTES = 8 * 1024 * 1024
 
+# "record": read LORA_SCRIPT sentence by sentence | "import": upload clips with their own transcripts
+MODES = ("record", "import")
+IMPORT_MIN_CLIPS = 5
+IMPORT_MAX_CLIPS = 1000
+TEXT_MAX_CHARS = 500
+
 # recording: clips can change | queued / training: a job owns the session | ready: voice usable
 # failed: clips can change again and training can be restarted
 EDITABLE = ("recording", "failed")
@@ -107,11 +113,12 @@ class LoraStore:
     def ready(self) -> list[dict]:
         return [s for s in self.sessions.values() if s["status"] == "ready"]
 
-    def create(self, name: str, gender: str, description: str) -> dict:
+    def create(self, name: str, gender: str, description: str, mode: str = "record") -> dict:
         with self._lock:
             s = {"id": uuid.uuid4().hex[:12], "name": name, "gender": gender, "description": description,
                  "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "status": "recording", "error": None,
-                 "denoise": True, "sentences": list(LORA_SCRIPT), "clips": {}}
+                 "denoise": True, "mode": mode, "sentences": list(LORA_SCRIPT) if mode == "record" else [],
+                 "clips": {}}
             self.sessions[s["id"]] = s
             self._save(s)
             return s
@@ -124,27 +131,52 @@ class LoraStore:
             return s
 
     def set_clip(self, sid: str, index: int, wav: bytes, seconds: float, peak: float) -> dict:
+        """Save the clip of sentence ``index``, replacing (and deleting) any earlier take."""
         with self._lock:
             s = self.get(sid)
             clips = self.path(sid) / "clips"
             clips.mkdir(parents=True, exist_ok=True)
-            name = f"{index:03d}.wav"
-            fd, tmp = tempfile.mkstemp(prefix="clip_", suffix=".wav", dir=clips)
-            with os.fdopen(fd, "wb") as f:
-                f.write(wav)
-            os.replace(tmp, clips / name)
+            # A fresh file name each time: imported items shift down when one is removed, so a
+            # name derived from the index could belong to another item.
+            name = f"{index:03d}_{uuid.uuid4().hex[:8]}.wav"
+            (clips / name).write_bytes(wav)
+            old = s["clips"].get(str(index))
             s["clips"][str(index)] = {"file": name, "seconds": round(seconds, 2), "peak": round(peak, 3),
                                       "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+            self._save(s)
+            if old:
+                (clips / old["file"]).unlink(missing_ok=True)
+            return s
+
+    def add_item(self, sid: str, text: str, wav: bytes, seconds: float, peak: float) -> dict:
+        """Import mode: append a sentence with its clip."""
+        with self._lock:
+            s = self.get(sid)
+            s["sentences"].append(text)
+            try:
+                return self.set_clip(sid, len(s["sentences"]) - 1, wav, seconds, peak)
+            except Exception:
+                s["sentences"].pop()
+                raise
+
+    def set_text(self, sid: str, index: int, text: str) -> dict:
+        with self._lock:
+            s = self.get(sid)
+            s["sentences"][index] = text
             self._save(s)
             return s
 
     def remove_clip(self, sid: str, index: int) -> dict:
+        """Drop a recording; in import mode the sentence goes too and later items move up."""
         with self._lock:
             s = self.get(sid)
             c = s["clips"].pop(str(index), None)
+            if s.get("mode") == "import":
+                s["sentences"].pop(index)
+                s["clips"] = {str(int(k) - 1 if int(k) > index else int(k)): v for k, v in s["clips"].items()}
+            self._save(s)
             if c:
                 (self.path(sid) / "clips" / c["file"]).unlink(missing_ok=True)
-            self._save(s)
             return s
 
     def delete(self, sid: str) -> dict:
@@ -171,7 +203,8 @@ class LoraStore:
         n = len(s["sentences"])
         recorded = [int(i) for i in s["clips"]]
         out = {"id": s["id"], "name": s["name"], "gender": s["gender"], "description": s["description"],
-               "created_at": s["created_at"], "status": s["status"], "error": s.get("error"),
+               "created_at": s["created_at"], "mode": s.get("mode", "record"),
+               "status": s["status"], "error": s.get("error"),
                "denoise": s.get("denoise", True), "sentences_total": n, "sentences_recorded": len(recorded),
                "recorded_seconds": round(sum(c["seconds"] for c in s["clips"].values()), 1)}
         if s["status"] in BUSY or s["status"] in ("ready", "failed"):

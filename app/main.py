@@ -17,16 +17,20 @@ VieNeu-TTS v3 Turbo speech server (OpenAI-style), per tts-api.txt.
 
     LoRA voices (a fine-tuned model per voice, GPU only; see app/lora.py):
     GET    /v1/lora/sessions                      -> list of recording/training sessions
-    POST   /v1/lora/sessions                      -> {"name", "gender", "description"}: new session + script
+    POST   /v1/lora/sessions                      -> {"name", "gender", "description", "mode": "record" | "import"}
+                                                     record = read the server's script, import = bring clips + text
     GET    /v1/lora/sessions/{id}                 -> session with its sentences, clips, training progress
     PUT    /v1/lora/sessions/{id}/clips/{i}       -> multipart {file}: record (or retake) sentence i
     GET    /v1/lora/sessions/{id}/clips/{i}       -> the recorded WAV
-    DELETE /v1/lora/sessions/{id}/clips/{i}       -> drop a recording
+    DELETE /v1/lora/sessions/{id}/clips/{i}       -> drop a recording (import mode: the clip and its text)
+    POST   /v1/lora/sessions/{id}/clips           -> import mode, multipart {file, text}: add a clip
+    PATCH  /v1/lora/sessions/{id}/sentences/{i}   -> import mode, {"text"}: fix a transcript
     POST   /v1/lora/sessions/{id}/train           -> {"denoise"}: queue training once every sentence is recorded
+                                                     (import mode: at least IMPORT_MIN_CLIPS clips)
     DELETE /v1/lora/sessions/{id}                 -> delete the session, its clips and its model
     A trained voice appears in /v1/voices with "lora": true and is used like any other voice.
 
-    GET  /v1/models, GET /health, GET / (browser test page), GET /lora (LoRA recording page)
+    GET  /v1/models, GET /health; browser pages (PAGES): / test page, /lora LoRA voices, /guide API guide
 
 Auth: ``Authorization: Bearer $TTS_API_KEY`` when TTS_API_KEY is set.
 Run:  uv run python -m app.main
@@ -737,12 +741,17 @@ def delete_voice(name: str):
     return {"id": name, "deleted": True}
 
 
-# ── LoRA voices: record the script, then train ───────────────────────────────
+# ── LoRA voices: record the script (or import clips + transcripts), then train ──
 
 class LoraSessionRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     gender: str = ""
     description: str = ""
+    mode: str = "record"  # "record": read the server's script | "import": upload clips with transcripts
+
+
+class LoraTextRequest(BaseModel):
+    text: str
 
 
 class LoraTrainRequest(BaseModel):
@@ -772,13 +781,46 @@ def _lora_editable(s: dict) -> None:
         raise HTTPException(409, f"the session is {s['status']}; its clips can no longer change")
 
 
+def _lora_import_only(s: dict) -> None:
+    if s.get("mode") != "import":
+        raise HTTPException(409, "this session records the server's script; only import sessions take their own text")
+
+
+def _lora_text(text: str) -> str:
+    text = re.sub(r"\s+", " ", unicodedata.normalize("NFC", text)).strip()
+    if not text:
+        raise HTTPException(400, "the transcript is empty")
+    if len(text) > lora.TEXT_MAX_CHARS:
+        raise HTTPException(400, f"the transcript is longer than {lora.TEXT_MAX_CHARS} characters; split the clip")
+    return text
+
+
+def _lora_clip(file: UploadFile) -> tuple[bytes, float, float]:
+    """Read and check an uploaded clip -> (16-bit WAV bytes, seconds, peak)."""
+    raw = file.file.read(lora.CLIP_MAX_BYTES + 1)
+    if not raw:
+        raise HTTPException(400, "the audio file is empty")
+    if len(raw) > lora.CLIP_MAX_BYTES:
+        raise HTTPException(413, f"the audio file is larger than {lora.CLIP_MAX_BYTES // (1024 * 1024)} MB")
+    wav, sr = _read_clip(raw)
+    seconds = len(wav) / sr if sr else 0
+    if not lora.CLIP_MIN_SECONDS <= seconds <= lora.CLIP_MAX_SECONDS:
+        raise HTTPException(400, f"the clip is {seconds:.1f} s; it must be "
+                                 f"{lora.CLIP_MIN_SECONDS:.0f}-{lora.CLIP_MAX_SECONDS:.0f} s")
+    peak = float(np.abs(wav).max()) if len(wav) else 0.0
+    if peak < 0.01:
+        raise HTTPException(400, "the clip is silent")
+    return _wav_bytes(_pcm16(wav), sr), seconds, peak
+
+
 @app.get("/v1/lora/sessions", dependencies=[Depends(_auth)])
 def lora_sessions():
     pool = engines()
     sessions = sorted(pool.lora_store.sessions.values(), key=lambda s: s["created_at"], reverse=True)
     return {"object": "list", "gpu_available": pool.gpu_available,
             "clip_min_seconds": lora.CLIP_MIN_SECONDS, "clip_max_seconds": lora.CLIP_MAX_SECONDS,
-            "script_sentences": len(lora.LORA_SCRIPT),
+            "script_sentences": len(lora.LORA_SCRIPT), "import_min_clips": lora.IMPORT_MIN_CLIPS,
+            "import_max_clips": lora.IMPORT_MAX_CLIPS, "text_max_chars": lora.TEXT_MAX_CHARS,
             "data": [_lora_view(s, detail=False) for s in sessions]}
 
 
@@ -786,10 +828,12 @@ def lora_sessions():
 def lora_create(req: LoraSessionRequest):
     pool = engines()
     name = _voice_name(req.name)
+    if req.mode not in lora.MODES:
+        raise HTTPException(400, f"mode must be one of {lora.MODES}")
     if pool.name_taken(name):
         raise HTTPException(409, f"a voice named '{name}' already exists")
-    s = pool.lora_store.create(name, req.gender.strip()[:20], req.description.strip()[:200])
-    log.info("LoRA session %s created for '%s'", s["id"], name)
+    s = pool.lora_store.create(name, req.gender.strip()[:20], req.description.strip()[:200], req.mode)
+    log.info("LoRA session %s (%s) created for '%s'", s["id"], req.mode, name)
     return _lora_view(s)
 
 
@@ -812,20 +856,31 @@ def lora_put_clip(sid: str, index: int, file: UploadFile = File(...)):
     s = _lora_session(sid)
     _lora_index(s, index)
     _lora_editable(s)
-    raw = file.file.read(lora.CLIP_MAX_BYTES + 1)
-    if not raw:
-        raise HTTPException(400, "the audio file is empty")
-    if len(raw) > lora.CLIP_MAX_BYTES:
-        raise HTTPException(413, f"the audio file is larger than {lora.CLIP_MAX_BYTES // (1024 * 1024)} MB")
-    wav, sr = _read_clip(raw)
-    seconds = len(wav) / sr if sr else 0
-    if not lora.CLIP_MIN_SECONDS <= seconds <= lora.CLIP_MAX_SECONDS:
-        raise HTTPException(400, f"the clip is {seconds:.1f} s; it must be "
-                                 f"{lora.CLIP_MIN_SECONDS:.0f}-{lora.CLIP_MAX_SECONDS:.0f} s")
-    peak = float(np.abs(wav).max()) if len(wav) else 0.0
-    if peak < 0.01:
-        raise HTTPException(400, "the clip is silent; check the microphone")
-    engines().lora_store.set_clip(sid, index, _wav_bytes(_pcm16(wav), sr), seconds, peak)
+    engines().lora_store.set_clip(sid, index, *_lora_clip(file))
+    return _lora_view(s)
+
+
+@app.post("/v1/lora/sessions/{sid}/clips", dependencies=[Depends(_auth)])
+def lora_add_clip(sid: str, file: UploadFile = File(...), text: str = Form(...)):
+    """Import mode: add a clip with its transcript (appended as the next sentence)."""
+    s = _lora_session(sid)
+    _lora_import_only(s)
+    _lora_editable(s)
+    if len(s["sentences"]) >= lora.IMPORT_MAX_CLIPS:
+        raise HTTPException(400, f"a session holds at most {lora.IMPORT_MAX_CLIPS} clips")
+    text = _lora_text(text)
+    engines().lora_store.add_item(sid, text, *_lora_clip(file))
+    return _lora_view(s)
+
+
+@app.patch("/v1/lora/sessions/{sid}/sentences/{index}", dependencies=[Depends(_auth)])
+def lora_set_text(sid: str, index: int, req: LoraTextRequest):
+    """Import mode: fix the transcript of a clip."""
+    s = _lora_session(sid)
+    _lora_index(s, index)
+    _lora_import_only(s)
+    _lora_editable(s)
+    engines().lora_store.set_text(sid, index, _lora_text(req.text))
     return _lora_view(s)
 
 
@@ -855,9 +910,14 @@ def lora_train(sid: str, req: Optional[LoraTrainRequest] = None):
     _lora_editable(s)
     if not pool.gpu_available:
         raise HTTPException(400, "LoRA training needs a CUDA GPU, and this server has none")
-    missing = [i + 1 for i in range(len(s["sentences"])) if str(i) not in s["clips"]]
-    if missing:
-        raise HTTPException(400, f"record every sentence first; missing: {', '.join(map(str, missing))}")
+    if s.get("mode") == "import":
+        if len(s["clips"]) < lora.IMPORT_MIN_CLIPS:
+            raise HTTPException(400, f"import at least {lora.IMPORT_MIN_CLIPS} clips first; "
+                                     f"there are {len(s['clips'])}")
+    else:
+        missing = [i + 1 for i in range(len(s["sentences"])) if str(i) not in s["clips"]]
+        if missing:
+            raise HTTPException(400, f"record every sentence first; missing: {', '.join(map(str, missing))}")
     pool.lora_store.update(sid, denoise=(req or LoraTrainRequest()).denoise)
     pool.lora_trainer.enqueue(sid)
     log.info("LoRA session %s ('%s') queued for training", sid, s["name"])
@@ -893,14 +953,22 @@ class _RevalidatedStatic(StaticFiles):
 app.mount("/static", _RevalidatedStatic(directory=STATIC_DIR), name="static")
 
 
-@app.get("/", include_in_schema=False)
-def test_page():
-    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+# Browser pages (path -> file in STATIC_DIR); the nav bar lists them in static/nav.js.
+PAGES = {
+    "/": "index.html",   # test page: voices, speech, cloning
+    "/lora": "lora.html",  # record or import, then train LoRA voices
+    "/guide": "guide.html",  # API guide with code samples
+}
 
 
-@app.get("/lora", include_in_schema=False)
-def lora_page():
-    return FileResponse(STATIC_DIR / "lora.html", headers={"Cache-Control": "no-cache"})
+def _page(file: str):
+    def page():
+        return FileResponse(STATIC_DIR / file, headers={"Cache-Control": "no-cache"})
+    return page
+
+
+for _path, _file in PAGES.items():
+    app.add_api_route(_path, _page(_file), methods=["GET"], include_in_schema=False)
 
 
 @app.get("/health")
