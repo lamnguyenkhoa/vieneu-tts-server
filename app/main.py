@@ -68,6 +68,12 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+# TTS_GPU picks the CUDA GPU by index (as nvidia-smi lists them). It must be applied before
+# torch is imported; the chosen GPU then appears to torch/VieNeu as cuda:0.
+if os.environ.get("TTS_GPU", "").strip():
+    os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["TTS_GPU"].strip()
+    os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")  # match nvidia-smi numbering
+
 
 def _env_int(name: str, default: int) -> int:
     try:
