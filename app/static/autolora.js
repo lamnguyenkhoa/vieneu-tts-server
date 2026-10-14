@@ -189,9 +189,11 @@ function render() {
   $("sBadge").className = `badge ${s.status}`;
   $("sBadge").textContent = s.status === "queued" && s.queue_position > 1
     ? `Queued (#${s.queue_position})` : STATUS_LABEL[s.status];
-  $("speechBar").style.width = `${Math.min(100, (100 * s.recorded_seconds) / 1200)}%`;
-  $("speechText").textContent = `${s.sentences_recorded} clips · ${fmtDuration(s.recorded_seconds)} of speech ` +
-    `(at least ${info.import_min_clips} clips; 10–30 minutes works best)`;
+  // Amount of speech against the 10-minute goal (upstream recommends 10-30 min), not a progress bar.
+  $("speechBar").style.width = `${Math.min(100, (100 * s.recorded_seconds) / 600)}%`;
+  $("speechText").textContent = `${s.sentences_recorded} clips · ${fmtDuration(s.recorded_seconds)} of speech, ` +
+    (s.recorded_seconds >= 600 ? "enough for a good voice" : "goal: 10 minutes or more") +
+    ` (at least ${info.import_min_clips} clips to train)`;
   renderProcessing();
   renderClips();
   renderTraining();

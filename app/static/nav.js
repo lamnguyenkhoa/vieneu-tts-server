@@ -1,8 +1,9 @@
 // Site navigation, shared by every page: add new pages here (and their route in app/main.py PAGES).
 const PAGES = [
   { href: "/", label: "Test" },
-  { href: "/lora", label: "LoRA voices" },
-  { href: "/lora-auto", label: "AI LoRA" },
+  { href: "/voices", label: "Voices" },
+  { href: "/lora", label: "LoRA training" },
+  { href: "/lora-auto", label: "LoRA training (AI)" },
   { href: "/guide", label: "API guide" },
 ];
 

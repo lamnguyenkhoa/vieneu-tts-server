@@ -137,3 +137,16 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-
 #clipTable .row-warn { color: var(--cpu); }
 #clipTable .row-error { color: var(--error); }
 button.icon { padding: 2px 8px; font-size: 12px; min-width: 30px; }
+.meter-label { margin-top: 12px; }
+.progress.meter { margin-top: 4px; }
+.progress.meter > div { background: var(--gpu); }
+textarea.short { min-height: 70px; }
+.manager-tools { margin-top: 0; margin-bottom: 8px; }
+.manager-tools input[type="search"] { flex: 1 1 220px; width: auto; }
+.manager-tools label.check { margin: 0; }
+.manager-list li { justify-content: flex-start; }
+.manager-list input[type="checkbox"] { width: auto; flex: none; }
+.manager-list .voice-info { display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
+.manager-list .item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+a.button { display: inline-flex; align-items: center; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; }
+a.button:hover { background: var(--bg); }

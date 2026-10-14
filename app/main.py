@@ -5,6 +5,7 @@ VieNeu-TTS v3 Turbo speech server (OpenAI-style), per tts-api.txt.
                                  "data": [{"id", "name", "gender", "description", "featured", "aliases", "custom"}]}
     POST   /v1/voices        -> multipart {name, file (3-8 s clip), denoise, description, gender}: clone a voice
     DELETE /v1/voices/{id}   -> remove a cloned voice (presets cannot be removed)
+    GET    /v1/voices/{id}/clip -> a cloned voice's trimmed reference clip (WAV)
     POST   /v1/audio/speech  -> {"model", "voice", "input", "response_format": "wav" | "pcm",
                                  "stream_format": "audio" | "sse", "sample_rate": 48000 | 24000 | 16000 | 8000,
                                  "temperature", "top_k", "top_p", "repetition_penalty", "max_chars",
@@ -37,8 +38,8 @@ VieNeu-TTS v3 Turbo speech server (OpenAI-style), per tts-api.txt.
                                                      poll GET /v1/lora/sessions/{id} ("auto" holds the progress),
                                                      then review and train it like any import session
 
-    GET  /v1/models, GET /health; browser pages (PAGES): / test page, /lora LoRA voices,
-         /lora-auto AI-assisted LoRA voices, /guide API guide
+    GET  /v1/models, GET /health; browser pages (PAGES): / test page, /voices cloned voices,
+         /lora LoRA voices, /lora-auto AI-assisted LoRA voices, /guide API guide
 
 Auth: ``Authorization: Bearer $TTS_API_KEY`` when TTS_API_KEY is set.
 Run:  uv run python -m app.main
@@ -373,8 +374,15 @@ class Engines:
                 "description": v.get("description", ""), "featured": v.get("featured"),
                 "aliases": list(v.get("aliases") or []), "custom": bool(v.get("custom")), "lora": False}
                for name, v in sorted_voices(self.primary().tts._preset_voices)]
+        for v in out:  # cloned voices: when, and whether their reference clip is kept
+            stored = self.store.voices.get(v["id"]) if v["custom"] else None
+            if stored:
+                v["created_at"] = stored.get("created_at")
+                v["has_clip"] = bool(stored.get("clip")) and (self.store.clips / stored["clip"]).is_file()
         out += [{"id": s["name"], "name": s["name"], "gender": s["gender"], "description": s["description"],
-                 "featured": None, "aliases": [], "custom": True, "lora": True}
+                 "featured": None, "aliases": [], "custom": True, "lora": True,
+                 "created_at": s.get("trained_at") or s["created_at"], "lora_session": s["id"],
+                 "lora_auto": s.get("source") == "auto"}
                 for s in sorted(self.lora_store.ready(), key=lambda s: s["name"].casefold())]
         return out
 
@@ -753,6 +761,17 @@ def delete_voice(name: str):
     return {"id": name, "deleted": True}
 
 
+@app.get("/v1/voices/{name}/clip", dependencies=[Depends(_auth)])
+def voice_clip(name: str):
+    """The trimmed reference clip a cloned voice was made from."""
+    pool = engines()
+    v = pool.store.voices.get(unicodedata.normalize("NFC", name))
+    path = pool.store.clips / v["clip"] if v and v.get("clip") else None
+    if path is None or not path.is_file():
+        raise HTTPException(404, f"no reference clip for '{name}'")
+    return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
 # ── LoRA voices: record the script (or import clips + transcripts), then train ──
 
 class LoraSessionRequest(BaseModel):
@@ -1014,6 +1033,7 @@ app.mount("/static", _RevalidatedStatic(directory=STATIC_DIR), name="static")
 # Browser pages (path -> file in STATIC_DIR); the nav bar lists them in static/nav.js.
 PAGES = {
     "/": "index.html",   # test page: voices, speech, cloning
+    "/voices": "voices.html",  # cloned and LoRA voices: listen, try, delete
     "/lora": "lora.html",  # record or import, then train LoRA voices
     "/lora-auto": "autolora.html",  # one long recording -> transcribed clips -> LoRA voice
     "/guide": "guide.html",  # API guide with code samples
