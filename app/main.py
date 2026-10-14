@@ -30,7 +30,15 @@ VieNeu-TTS v3 Turbo speech server (OpenAI-style), per tts-api.txt.
     DELETE /v1/lora/sessions/{id}                 -> delete the session, its clips and its model
     A trained voice appears in /v1/voices with "lora": true and is used like any other voice.
 
-    GET  /v1/models, GET /health; browser pages (PAGES): / test page, /lora LoRA voices, /guide API guide
+    AI-assisted LoRA voices (one long recording, split and transcribed by the STT server; see app/autolora.py):
+    GET    /v1/lora/auto                          -> {"stt_url", "stt_available", "max_upload_mb", "max_minutes"...}
+    POST   /v1/lora/auto                          -> multipart {file, name, gender, description}: an import session
+                                                     in status "transcribing" that fills with clips + transcripts;
+                                                     poll GET /v1/lora/sessions/{id} ("auto" holds the progress),
+                                                     then review and train it like any import session
+
+    GET  /v1/models, GET /health; browser pages (PAGES): / test page, /lora LoRA voices,
+         /lora-auto AI-assisted LoRA voices, /guide API guide
 
 Auth: ``Authorization: Bearer $TTS_API_KEY`` when TTS_API_KEY is set.
 Run:  uv run python -m app.main
@@ -93,6 +101,8 @@ _load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 if os.environ.get("TTS_GPU", "").strip():
     os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["TTS_GPU"].strip()
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")  # match nvidia-smi numbering
+
+from app import autolora  # noqa: E402  (reads its settings from the environment, so after .env)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -315,6 +325,7 @@ class Engines:
         # LoRA voices: each one is its own fine-tuned model, loaded on the GPU on first use.
         self.lora_store = LoraStore(Path(os.environ.get("TTS_LORA_DIR") or root / "data" / "lora"))
         self.lora_trainer = LoraTrainer(self.lora_store, on_ready=self._lora_trained)
+        self.lora_auto = autolora.AutoLora(self.lora_store)  # long recording -> clips + transcripts
         self.lora_max_loaded = max(1, _env_int("TTS_LORA_MAX_LOADED", 1))
         self._lora: "OrderedDict[str, Engine]" = OrderedDict()  # session id -> engine, least recently used first
         self._lora_lock = threading.Lock()
@@ -424,6 +435,7 @@ class Engines:
             if eng is not None and (eng.active or eng.waiting):
                 raise HTTPException(409, "this voice is speaking right now; try again in a moment")
             self._unload_lora(sid)
+        self.lora_auto.cancel(sid)
         self.lora_trainer.cancel(sid)
         return self.lora_store.delete(sid)
 
@@ -924,6 +936,52 @@ def lora_train(sid: str, req: Optional[LoraTrainRequest] = None):
     return _lora_view(s)
 
 
+# ── AI-assisted LoRA voices: one long recording -> clips + transcripts (app/autolora.py) ──
+
+@app.get("/v1/lora/auto", dependencies=[Depends(_auth)])
+def lora_auto_info():
+    ok, detail = autolora.stt_health()
+    return {"stt_url": autolora.STT_URL, "stt_available": ok, "stt_detail": detail,
+            "ffmpeg": autolora.ffmpeg_path() is not None, "gpu_available": engines().gpu_available,
+            "max_upload_mb": autolora.MAX_UPLOAD_MB, "max_minutes": autolora.MAX_MINUTES,
+            "min_seconds": autolora.MIN_SOURCE_SECONDS, "import_min_clips": lora.IMPORT_MIN_CLIPS,
+            "import_max_clips": lora.IMPORT_MAX_CLIPS, "text_max_chars": lora.TEXT_MAX_CHARS}
+
+
+@app.post("/v1/lora/auto", dependencies=[Depends(_auth)])
+def lora_auto_create(file: UploadFile = File(...), name: str = Form(...), gender: str = Form(""),
+                     description: str = Form("")):
+    """Start a voice from one long recording of one speaker: it is split and transcribed in the background."""
+    pool = engines()
+    name = _voice_name(name)
+    if pool.name_taken(name):
+        raise HTTPException(409, f"a voice named '{name}' already exists")
+    ok, detail = autolora.stt_health()
+    if not ok:
+        raise HTTPException(503, f"the speech-to-text server at {autolora.STT_URL} is not reachable ({detail})")
+    ext = Path(file.filename or "").suffix.lower()
+    source = "source" + (ext if re.fullmatch(r"\.[a-z0-9]{1,8}", ext) else ".audio")
+    s = pool.lora_store.create(name, gender.strip()[:20], description.strip()[:200], "import", source="auto",
+                               status=lora.TRANSCRIBING, auto={"stage": "queued", "file": source})
+    limit = autolora.MAX_UPLOAD_MB * 1024 * 1024
+    size = 0
+    try:
+        with open(pool.lora_store.path(s["id"]) / source, "wb") as out:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, f"the recording is larger than {autolora.MAX_UPLOAD_MB} MB")
+                out.write(chunk)
+        if not size:
+            raise HTTPException(400, "the audio file is empty")
+    except BaseException:
+        pool.lora_store.delete(s["id"])
+        raise
+    pool.lora_auto.submit(s["id"])
+    log.info("auto LoRA session %s created for '%s' from %s (%.1f MB)", s["id"], name, file.filename, size / 1e6)
+    return _lora_view(s)
+
+
 @app.get("/v1/models", dependencies=[Depends(_auth)])
 def models():
     pool = engines()
@@ -957,6 +1015,7 @@ app.mount("/static", _RevalidatedStatic(directory=STATIC_DIR), name="static")
 PAGES = {
     "/": "index.html",   # test page: voices, speech, cloning
     "/lora": "lora.html",  # record or import, then train LoRA voices
+    "/lora-auto": "autolora.html",  # one long recording -> transcribed clips -> LoRA voice
     "/guide": "guide.html",  # API guide with code samples
 }
 

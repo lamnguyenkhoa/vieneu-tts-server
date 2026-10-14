@@ -75,3 +75,12 @@ A LoRA voice is the model fine-tuned on one speaker, which tracks the voice more
 - Each voice is a full model (about 250 MB on disk). It loads on the GPU on first use; `TTS_LORA_MAX_LOADED` (default 1) caps how many stay loaded.
 - Sessions, clips and models live in `TTS_LORA_DIR` (default `./data/lora`). Back it up with `data/voices`. If the server restarts during training, that session is marked failed and can be trained again.
 - Training settings: `TTS_LORA_EPOCHS`, `TTS_LORA_LR`, `TTS_LORA_RANK`, `TTS_LORA_BATCH` (see `.env.example`). By default the number of epochs follows the data: 25 for 14 clips, down to upstream's 3 for 100 clips or more. Upstream recommends 10-30 minutes of audio for best results; one minute is the quick start.
+
+### AI-assisted LoRA voices
+
+The `/lora-auto` page builds a LoRA voice from **one long recording of one speaker**, such as an audiobook chapter or a lecture. The server decodes it with ffmpeg and splits it at the pauses into clips of about 3-15 s. It sends each clip to a speech-to-text server ([phostt](https://github.com/ekhodzitsky/phostt)-compatible: `POST /transcribe` returns `{"text"}`), and adds the clips with their transcripts to an import session. Clips with no speech are dropped. The page then lists every clip with a play button and an editable transcript, and flags the clips whose word count looks wrong for their length. Fix or remove them, then train as usual. The transcripts come from speech recognition, so the review matters: the model learns exactly what they say.
+
+- `TTS_STT_URL` (default `http://localhost:8123`) is the speech-to-text server; the page shows whether it is reachable.
+- `TTS_AUTO_MAX_MB` (default 500) caps the upload, and `TTS_AUTO_MAX_MINUTES` (default 120) caps how much of the recording is used.
+- ffmpeg decodes any audio or video format; set `TTS_FFMPEG` when it is not on `PATH`. Without ffmpeg, only WAV, FLAC, OGG and MP3 work.
+- API: `POST /v1/lora/auto` (multipart `file`, `name`, `gender`, `description`) creates the session in status `transcribing`; `GET /v1/lora/sessions/{id}` reports progress under `auto`.

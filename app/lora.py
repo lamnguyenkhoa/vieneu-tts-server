@@ -63,8 +63,10 @@ TEXT_MAX_CHARS = 500
 
 # recording: clips can change | queued / training: a job owns the session | ready: voice usable
 # failed: clips can change again and training can be restarted
+# transcribing: an import session being filled from one long recording (app.autolora)
 EDITABLE = ("recording", "failed")
 BUSY = ("queued", "training")
+TRANSCRIBING = "transcribing"
 
 
 class LoraStore:
@@ -83,6 +85,13 @@ class LoraStore:
                     continue
                 if s.get("status") in BUSY:  # the training process died with the old server
                     s["status"], s["error"] = "failed", "The server restarted during training. Start it again."
+                    self.sessions[s["id"]] = s
+                    self._save(s)
+                elif s.get("status") == TRANSCRIBING:  # so did the transcription job; keep its clips
+                    msg = "The server restarted while transcribing the recording; the clips found so far were kept."
+                    s["status"], s["error"] = "recording", msg
+                    s["auto"] = {**s.get("auto", {}), "stage": "failed", "message": msg}
+                    (f.parent / s["auto"].get("file", "-")).unlink(missing_ok=True)
                     self.sessions[s["id"]] = s
                     self._save(s)
                 else:
@@ -113,12 +122,13 @@ class LoraStore:
     def ready(self) -> list[dict]:
         return [s for s in self.sessions.values() if s["status"] == "ready"]
 
-    def create(self, name: str, gender: str, description: str, mode: str = "record") -> dict:
+    def create(self, name: str, gender: str, description: str, mode: str = "record", **extra) -> dict:
+        """``extra`` adds or overrides fields, e.g. ``source="auto"``, ``status=TRANSCRIBING``."""
         with self._lock:
             s = {"id": uuid.uuid4().hex[:12], "name": name, "gender": gender, "description": description,
                  "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "status": "recording", "error": None,
                  "denoise": True, "mode": mode, "sentences": list(LORA_SCRIPT) if mode == "record" else [],
-                 "clips": {}}
+                 "clips": {}, **extra}
             self.sessions[s["id"]] = s
             self._save(s)
             return s
@@ -211,6 +221,10 @@ class LoraStore:
             out["progress"] = self.progress(s["id"])
         if queue_position is not None:
             out["queue_position"] = queue_position
+        if s.get("source"):
+            out["source"] = s["source"]  # "auto": made from one long recording (app.autolora)
+        if s.get("auto"):
+            out["auto"] = {k: v for k, v in s["auto"].items() if k != "file"}
         if detail:
             out["sentences"] = [{"index": i, "text": t, "clip": s["clips"].get(str(i))}
                                 for i, t in enumerate(s["sentences"])]

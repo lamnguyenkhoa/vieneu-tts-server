@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VieNeu AI LoRA Voice</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main>
+  <nav id="siteNav" class="site-nav" aria-label="Pages"></nav>
+  <header>
+    <h1>AI-assisted LoRA voice</h1>
+  </header>
+  <div class="panel">
+    <label for="key">API key</label>
+    <input id="key" type="password" placeholder="Leave empty if TTS_API_KEY is not set" autocomplete="off">
+    <div id="sttStatus" class="status"></div>
+    <div id="gpuWarning" class="status error" hidden>This server has no CUDA GPU, so it cannot train or run LoRA voices.</div>
+  </div>
+
+  <!-- List of sessions + new voice -->
+  <section id="listView">
+    <h2 class="panel-title">New voice from one recording</h2>
+    <div class="panel">
+      <div class="hint">Upload one long recording of <strong>one speaker only</strong>, such as an audiobook chapter, a lecture or a voice memo. The server cuts it at the pauses into clips of 3–15 s, and the speech-to-text server transcribes each clip. You then check the transcripts and train. 10–30 minutes of clear speech works best; music, other voices and noise make the voice worse.</div>
+      <div class="row">
+        <div>
+          <label for="newName">Name</label>
+          <input id="newName" maxlength="40" placeholder="e.g. Lan (LoRA)" autocomplete="off">
+        </div>
+        <div>
+          <label for="newGender">Gender</label>
+          <select id="newGender">
+            <option value="">(not set)</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select>
+        </div>
+      </div>
+      <label for="newDesc">Description <span class="hint">(optional)</span></label>
+      <input id="newDesc" maxlength="200" autocomplete="off">
+      <label for="newFile">Recording</label>
+      <input id="newFile" type="file" accept="audio/*,video/*,.wav,.flac,.ogg,.mp3,.m4a,.aac,.opus,.webm,.mp4">
+      <div id="fileHint" class="hint"></div>
+      <div class="actions">
+        <button id="create" class="primary" disabled>Upload &amp; transcribe</button>
+      </div>
+      <div id="uploadProgress" hidden>
+        <div class="progress"><div id="uploadBar"></div></div>
+      </div>
+      <div id="createStatus" class="status"></div>
+    </div>
+
+    <h2 class="panel-title">Your AI LoRA voices</h2>
+    <div class="panel">
+      <ul id="sessions" class="voice-list"><li class="hint">Loading…</li></ul>
+      <div class="hint list-note">Voices recorded sentence by sentence or imported as clips are on the <a href="/lora">LoRA voices</a> page.</div>
+    </div>
+  </section>
+
+  <!-- One session: transcribe, review, train -->
+  <section id="sessionView" hidden>
+    <div class="panel">
+      <div class="session-head">
+        <strong id="sName"></strong>
+        <span id="sBadge" class="badge"></span>
+        <button id="back">All voices</button>
+      </div>
+      <div class="progress"><div id="speechBar"></div></div>
+      <div id="speechText" class="hint"></div>
+    </div>
+
+    <div id="procPanel" class="panel proc-panel" hidden>
+      <div class="progress"><div id="procBar"></div></div>
+      <div id="procText" class="hint"></div>
+    </div>
+    <div id="procStatus" class="status"></div>
+
+    <h2 class="panel-title">Review transcripts</h2>
+    <div class="panel">
+      <div id="reviewHint" class="hint">The transcripts come from speech recognition and can be wrong, and the model learns exactly what they say. Listen to the clips (flagged ones first), fix any word that does not match the audio, and remove clips with other voices, music, laughter or cut-off words. A change is saved when you leave the text box.</div>
+      <div class="actions review-tools">
+        <div class="toggle" role="radiogroup" aria-label="Clips to show">
+          <label><input type="radio" name="filter" value="all" checked> All <span id="countAll"></span></label>
+          <label><input type="radio" name="filter" value="flagged"> Flagged <span id="countFlagged"></span></label>
+        </div>
+        <span class="spacer"></span>
+        <label class="check"><input id="autoNext" type="checkbox" checked> Play the next clip when one ends</label>
+      </div>
+      <div class="table-wrap review-wrap">
+        <table id="clipTable">
+          <thead><tr><th>#</th><th></th><th>Length</th><th>Transcript</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="reviewStatus" class="status"></div>
+    </div>
+
+    <h2 class="panel-title">Training</h2>
+    <div id="trainPanel" class="panel">
+      <label class="check"><input id="denoise" type="checkbox" checked> Remove background noise before training</label>
+      <div class="actions">
+        <button id="trainBtn" class="primary" disabled>Start training</button>
+      </div>
+      <div id="trainHint" class="hint"></div>
+      <div id="trainProgress" hidden>
+        <div class="progress"><div id="trainBar"></div></div>
+        <div id="trainText" class="hint"></div>
+      </div>
+      <div id="trainStatus" class="status"></div>
+      <details id="logBox" hidden>
+        <summary>Training log</summary>
+        <pre id="trainLog" class="log"></pre>
+      </details>
+    </div>
+
+    <div id="tryPanel" hidden>
+      <h2 class="panel-title">Try your voice</h2>
+      <div class="panel">
+        <label for="tryText">Text</label>
+        <textarea id="tryText">Xin chào, đây là giọng nói của tôi sau khi huấn luyện. Bạn thấy có giống không?</textarea>
+        <div class="actions">
+          <button id="trySpeak" class="primary">Speak</button>
+          <a href="/">Use it on the test page</a>
+        </div>
+        <div id="tryStatus" class="status"></div>
+        <audio id="tryPlayer" controls hidden></audio>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="deleteSession" class="danger">Delete this voice</button>
+    </div>
+    <audio id="clipPlayer" hidden></audio>
+  </section>
+</main>
+<script src="/static/nav.js"></script>
+<script src="/static/autolora.js"></script>
+</body>
+</html>

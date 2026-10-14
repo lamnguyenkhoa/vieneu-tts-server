@@ -2,6 +2,7 @@
 const PAGES = [
   { href: "/", label: "Test" },
   { href: "/lora", label: "LoRA voices" },
+  { href: "/lora-auto", label: "AI LoRA" },
   { href: "/guide", label: "API guide" },
 ];
 

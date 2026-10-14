@@ -31,7 +31,8 @@ function setMsg(id, msg, isError = false) {
   $(id).classList.toggle("error", isError);
 }
 
-const STATUS_LABEL = { recording: "Recording", queued: "Queued", training: "Training", ready: "Ready", failed: "Failed" };
+const STATUS_LABEL = { recording: "Recording", queued: "Queued", training: "Training", ready: "Ready", failed: "Failed",
+  transcribing: "Transcribing" };
 const EDITABLE = ["recording", "failed"];
 const BUSY = ["queued", "training"];
 let clipMin = 1, clipMax = 20, importMin = 5, importMax = 1000, textMax = 500;
