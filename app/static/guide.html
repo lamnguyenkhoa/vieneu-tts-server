@@ -24,11 +24,21 @@
       <tbody>
         <tr><td>GET</td><td><code>/v1/voices</code></td><td>Lists the voices. Pass a <code>data[].id</code> as <code>voice</code>. If you leave <code>voice</code> out, the server uses <code>default</code>.</td></tr>
         <tr><td>POST</td><td><code>/v1/audio/speech</code></td><td>Turns text into audio.</td></tr>
-        <tr><td>POST</td><td><code>/v1/voices</code></td><td>Clones a voice. Multipart form: <code>name</code> (1–40 letters, digits, spaces or <code>- _ . ( )</code>), <code>file</code> (WAV, FLAC or OGG, 3–8 s, up to 5 MB), optional <code>denoise</code> (default true), <code>gender</code>, <code>description</code>. The new voice is usable right away by its name.</td></tr>
+        <tr><td>POST</td><td><code>/v1/voices</code></td><td>Clones a voice. Multipart form: <code>name</code> (1–40 letters, digits, spaces or <code>- _ . ( )</code>), <code>file</code> (3–8 s, up to 5 MB; WAV, FLAC, OGG or MP3, or any format when the server has ffmpeg), optional <code>denoise</code> (default true), <code>gender</code>, <code>description</code>. The new voice is usable right away by its name.</td></tr>
         <tr><td>DELETE</td><td><code>/v1/voices/{id}</code></td><td>Removes a cloned or LoRA voice. Built-in voices cannot be removed (403).</td></tr>
-        <tr><td>GET, POST</td><td><code>/v1/lora/sessions</code></td><td>Lists LoRA recording sessions, or starts one: JSON <code>{"name", "gender", "description"}</code>. The session holds the sentences to read.</td></tr>
-        <tr><td>PUT</td><td><code>/v1/lora/sessions/{id}/clips/{i}</code></td><td>Saves (or replaces) the recording of sentence <code>i</code>. Multipart <code>file</code>: WAV, FLAC or OGG, 1–20 s.</td></tr>
-        <tr><td>POST</td><td><code>/v1/lora/sessions/{id}/train</code></td><td>Queues training once every sentence is recorded. Poll <code>GET /v1/lora/sessions/{id}</code> for <code>status</code> and <code>progress</code>; at <code>"ready"</code> the voice is in <code>/v1/voices</code> with <code>"lora": true</code>.</td></tr>
+        <tr><td>GET</td><td><code>/v1/voices/{id}/clip</code></td><td>The reference clip a cloned voice was made from (WAV).</td></tr>
+        <tr><td colspan="3"><strong>LoRA training</strong> (GPU only; see <a href="#lora">Train a LoRA voice</a>)</td></tr>
+        <tr><td>GET</td><td><code>/v1/lora/sessions</code></td><td>Lists training sessions (without their clips) and the server's limits.</td></tr>
+        <tr><td>POST</td><td><code>/v1/lora/sessions</code></td><td>Starts a session. JSON <code>{"name", "gender", "description", "mode"}</code>: <code>"record"</code> (default) reads the server's script, <code>"import"</code> brings your own clips and transcripts.</td></tr>
+        <tr><td>POST</td><td><code>/v1/lora/auto</code></td><td>Starts a session from one long recording (AI method). Multipart <code>file</code>, <code>name</code>, optional <code>gender</code>, <code>description</code>.</td></tr>
+        <tr><td>GET</td><td><code>/v1/lora/auto</code></td><td>Whether the speech-to-text server is reachable, and the upload limits.</td></tr>
+        <tr><td>GET</td><td><code>/v1/lora/sessions/{id}</code></td><td>One session: <code>status</code>, its sentences with clips, and training or transcription progress. Poll it.</td></tr>
+        <tr><td>PUT</td><td><code>/v1/lora/sessions/{id}/clips/{i}</code></td><td>Record mode: saves (or replaces) the clip of sentence <code>i</code>. Multipart <code>file</code>, 1–20 s.</td></tr>
+        <tr><td>POST</td><td><code>/v1/lora/sessions/{id}/clips</code></td><td>Import mode: adds a clip with its transcript. Multipart <code>file</code> (1–20 s), <code>text</code> (up to 500 characters).</td></tr>
+        <tr><td>PATCH</td><td><code>/v1/lora/sessions/{id}/sentences/{i}</code></td><td>Import mode: fixes a transcript. JSON <code>{"text"}</code>.</td></tr>
+        <tr><td>GET, DELETE</td><td><code>/v1/lora/sessions/{id}/clips/{i}</code></td><td>Downloads a clip (WAV), or removes it. In import mode its transcript goes too, and later clips move up one index.</td></tr>
+        <tr><td>POST</td><td><code>/v1/lora/sessions/{id}/train</code></td><td>Queues training. JSON <code>{"denoise": true}</code> (optional). Record mode needs every sentence; import mode needs at least 5 clips.</td></tr>
+        <tr><td>DELETE</td><td><code>/v1/lora/sessions/{id}</code></td><td>Deletes the session, its clips and its model, stopping any running job.</td></tr>
         <tr><td>GET</td><td><code>/health</code></td><td>Status and device (no key needed). Returns 503 while the model loads.</td></tr>
       </tbody>
     </table>
@@ -176,6 +186,143 @@ if not res.ok:
     raise RuntimeError(res.json()["error"]["message"])
 print(res.json()["id"])  # pass this as "voice" to /v1/audio/speech</pre></div>
 
+    <h3 id="lora">Train a LoRA voice</h3>
+    <p>A LoRA voice is the model fine-tuned on one speaker. It sounds closer to the speaker than a clone, but training needs the server's CUDA GPU, and the voice runs on the GPU only. There are two ways to give the server training data. Both end in the same kind of session and the same training call.</p>
+    <ul>
+      <li><strong>Manual:</strong> either read the server's 14-sentence script (<code>"mode": "record"</code>, about a minute of speech), or bring your own clips of one sentence each with their transcripts (<code>"mode": "import"</code>, 5–1000 clips of 1–20 s).</li>
+      <li><strong>AI:</strong> upload one long recording of one speaker. The server cuts it at the pauses into clips of 3–15 s, and the speech-to-text server at <code>TTS_STT_URL</code> transcribes each clip. Check <code>GET /v1/lora/auto</code> first: <code>stt_available</code> must be true, or the upload returns 503.</li>
+    </ul>
+    <p>Then poll <code>GET /v1/lora/sessions/{id}</code> every few seconds and follow <code>status</code>:</p>
+    <table>
+      <thead><tr><th><code>status</code></th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>transcribing</code></td><td>AI method only: the recording is being split and transcribed. <code>auto</code> holds <code>stage</code> (<code>queued</code>, <code>decoding</code>, <code>splitting</code>, <code>transcribing</code>, then <code>done</code> or <code>failed</code>), <code>done</code>, <code>total</code>, <code>kept</code> and <code>message</code>. Clips appear in <code>sentences</code> as they are transcribed.</td></tr>
+        <tr><td><code>recording</code></td><td>Clips can be added, changed or removed, and training can start. After a failed transcription, <code>error</code> says why, and the clips found so far are kept.</td></tr>
+        <tr><td><code>queued</code>, <code>training</code></td><td>A training job owns the session. <code>queue_position</code> is 0 while it trains. <code>progress</code> holds <code>stage</code> (<code>preparing</code>, <code>training</code>, <code>saving</code>), <code>step</code>, <code>total_steps</code>, <code>loss</code> and <code>eta_s</code> (seconds left).</td></tr>
+        <tr><td><code>ready</code></td><td>Done: the voice is in <code>/v1/voices</code> with <code>"lora": true</code>. Use its name as <code>voice</code>, with <code>"device": "gpu"</code>.</td></tr>
+        <tr><td><code>failed</code></td><td>Training failed; <code>error</code> and <code>log</code> say why. Clips can change again, and <code>/train</code> starts it again.</td></tr>
+      </tbody>
+    </table>
+    <p>Speech recognition makes mistakes, and the model learns exactly what the transcripts say. Before training an AI session, read <code>sentences[].text</code>, fix wrong words with <code>PATCH</code>, and delete clips with other voices, music or cut-off words. The <a href="/lora-auto">LoRA training (AI)</a> page does this with a player. The model also reads text as written, so numbers in transcripts should be spelled out ("mười giờ", not "10 giờ").</p>
+    <p>Clips can be WAV, FLAC, OGG or MP3, or any format the server's ffmpeg reads. Mono recordings without music or background voices work best. More speech gives a closer voice: one minute works, and 10–30 minutes is best. Training takes a few minutes for a minute of speech, and longer for more. Only one training job runs at a time; the others wait in the queue.</p>
+
+    <div class="tabs" data-group="lora">
+      <button data-tab="ai" class="active">AI (Python)</button><button data-tab="import">Import (Python)</button><button data-tab="record">Record (Python)</button><button data-tab="curl">curl</button>
+    </div>
+    <div class="code" data-group="lora" data-tab="ai"><button class="copy">Copy</button><pre>import time
+import requests
+
+BASE = "{{BASE}}"
+H = {"Authorization": "Bearer {{KEY}}"}
+
+def check(res):
+    if not res.ok:
+        raise RuntimeError(res.json()["error"]["message"])
+    return res.json()
+
+def wait(sid, busy):
+    """Poll the session until its status leaves `busy`."""
+    while True:
+        s = check(requests.get(f"{BASE}/v1/lora/sessions/{sid}", headers=H, timeout=30))
+        if s["status"] not in busy:
+            return s
+        print(s["status"], s.get("auto") if s["status"] == "transcribing" else s.get("progress"))
+        time.sleep(5)
+
+# 1. Upload one long recording of one speaker (any audio format).
+with open("speaker.mp3", "rb") as f:
+    s = check(requests.post(f"{BASE}/v1/lora/auto", headers=H, timeout=600,
+                            data={"name": "Lan (LoRA)", "gender": "female"},
+                            files={"file": ("speaker.mp3", f)}))
+sid = s["id"]
+
+# 2. Wait for it to be split and transcribed.
+s = wait(sid, ["transcribing"])
+if s["error"]:
+    print("transcription stopped:", s["error"])
+print(s["sentences_recorded"], "clips,", s["recorded_seconds"], "s of speech")
+
+# 3. Review: fix wrong transcripts, drop bad clips (highest index first, as later indexes shift).
+for x in s["sentences"]:
+    print(x["index"], f'{x["clip"]["seconds"]:.1f}s', x["text"])
+# check(requests.patch(f"{BASE}/v1/lora/sessions/{sid}/sentences/3", headers=H, json={"text": "Câu đã sửa."}))
+# check(requests.delete(f"{BASE}/v1/lora/sessions/{sid}/clips/7", headers=H))
+
+# 4. Train, and wait until the voice is ready.
+check(requests.post(f"{BASE}/v1/lora/sessions/{sid}/train", headers=H, json={"denoise": True}, timeout=30))
+s = wait(sid, ["queued", "training"])
+print(s["status"], s.get("error") or "")  # "ready": use voice="Lan (LoRA)", device="gpu"</pre></div>
+    <div class="code" data-group="lora" data-tab="import" hidden><button class="copy">Copy</button><pre>import time
+from pathlib import Path
+import requests
+
+BASE = "{{BASE}}"
+H = {"Authorization": "Bearer {{KEY}}"}
+
+def check(res):
+    if not res.ok:
+        raise RuntimeError(res.json()["error"]["message"])
+    return res.json()
+
+# clips/001.wav + clips/001.txt, clips/002.wav + clips/002.txt, ... (one sentence per clip)
+s = check(requests.post(f"{BASE}/v1/lora/sessions", headers=H, timeout=30,
+                        json={"name": "Minh (LoRA)", "gender": "male", "mode": "import"}))
+sid = s["id"]
+for wav in sorted(Path("clips").glob("*.wav")):
+    text = wav.with_suffix(".txt").read_text(encoding="utf-8").strip()
+    with open(wav, "rb") as f:
+        check(requests.post(f"{BASE}/v1/lora/sessions/{sid}/clips", headers=H, timeout=60,
+                            data={"text": text}, files={"file": (wav.name, f, "audio/wav")}))
+
+check(requests.post(f"{BASE}/v1/lora/sessions/{sid}/train", headers=H, json={"denoise": True}, timeout=30))
+while True:
+    s = check(requests.get(f"{BASE}/v1/lora/sessions/{sid}", headers=H, timeout=30))
+    if s["status"] not in ("queued", "training"):
+        break
+    print(s["status"], s.get("progress"))
+    time.sleep(5)
+print(s["status"], s.get("error") or "")</pre></div>
+    <div class="code" data-group="lora" data-tab="record" hidden><button class="copy">Copy</button><pre>import requests
+
+BASE = "{{BASE}}"
+H = {"Authorization": "Bearer {{KEY}}"}
+
+# The session holds the script: the speaker reads each sentence into its own clip.
+s = requests.post(f"{BASE}/v1/lora/sessions", headers=H, timeout=30,
+                  json={"name": "Hoa (LoRA)", "gender": "female", "mode": "record"}).json()
+sid = s["id"]
+for x in s["sentences"]:
+    print(x["index"], x["text"])
+
+# After recording sentence i to take_i.wav:
+for i in range(len(s["sentences"])):
+    with open(f"take_{i}.wav", "rb") as f:
+        res = requests.put(f"{BASE}/v1/lora/sessions/{sid}/clips/{i}", headers=H, timeout=60,
+                           files={"file": (f"take_{i}.wav", f, "audio/wav")})
+    res.raise_for_status()
+
+requests.post(f"{BASE}/v1/lora/sessions/{sid}/train", headers=H, json={"denoise": True}, timeout=30).raise_for_status()
+# then poll GET /v1/lora/sessions/{sid} as in the other tabs</pre></div>
+    <div class="code" data-group="lora" data-tab="curl" hidden><button class="copy">Copy</button><pre># AI: one long recording; the response's "id" is the session id
+curl -X POST {{BASE}}/v1/lora/auto -H "Authorization: Bearer {{KEY}}" \
+  -F "name=Lan (LoRA)" -F "gender=female" -F "file=@speaker.mp3"
+
+# Manual import: create the session, then add each clip with its transcript
+curl -X POST {{BASE}}/v1/lora/sessions -H "Authorization: Bearer {{KEY}}" \
+  -H "Content-Type: application/json" -d '{"name": "Minh (LoRA)", "mode": "import"}'
+curl -X POST {{BASE}}/v1/lora/sessions/SESSION_ID/clips -H "Authorization: Bearer {{KEY}}" \
+  -F "file=@clip1.wav" -F "text=Xin chào, tôi rất vui được gặp bạn."
+
+# Check progress, fix a transcript, remove a clip
+curl {{BASE}}/v1/lora/sessions/SESSION_ID -H "Authorization: Bearer {{KEY}}"
+curl -X PATCH {{BASE}}/v1/lora/sessions/SESSION_ID/sentences/0 -H "Authorization: Bearer {{KEY}}" \
+  -H "Content-Type: application/json" -d '{"text": "Câu đã sửa."}'
+curl -X DELETE {{BASE}}/v1/lora/sessions/SESSION_ID/clips/3 -H "Authorization: Bearer {{KEY}}"
+
+# Train, then poll the session until "status" is "ready"
+curl -X POST {{BASE}}/v1/lora/sessions/SESSION_ID/train -H "Authorization: Bearer {{KEY}}" \
+  -H "Content-Type: application/json" -d '{"denoise": true}'</pre></div>
+
     <h3>Errors</h3>
     <p>Errors are JSON in OpenAI's format: <code>{"error": {"message": "...", "type": "invalid_request_error", "code": 400}}</code>.</p>
     <table>
@@ -183,11 +330,11 @@ print(res.json()["id"])  # pass this as "voice" to /v1/audio/speech</pre></div>
       <tbody>
         <tr><td>400</td><td>Bad request: empty <code>input</code>, unknown <code>voice</code>, or unsupported <code>response_format</code>.</td></tr>
         <tr><td>401</td><td>Missing or wrong API key.</td></tr>
-        <tr><td>404</td><td>Deleting a cloned voice that does not exist.</td></tr>
-        <tr><td>409</td><td>Cloning with a name that is already taken.</td></tr>
-        <tr><td>413</td><td>Clone clip larger than 5 MB.</td></tr>
+        <tr><td>404</td><td>A voice, LoRA session or clip that does not exist.</td></tr>
+        <tr><td>409</td><td>A voice name that is already taken, or changing a LoRA session while it is transcribing, queued, training or ready.</td></tr>
+        <tr><td>413</td><td>Upload too large: clone clip over 5 MB, LoRA clip over 8 MB, or long recording over <code>TTS_AUTO_MAX_MB</code> (500 MB by default).</td></tr>
         <tr><td>429</td><td>Server busy. Retry after the number of seconds in the <code>Retry-After</code> header.</td></tr>
-        <tr><td>503</td><td>Model still loading.</td></tr>
+        <tr><td>503</td><td>Model still loading, or (for <code>POST /v1/lora/auto</code>) the speech-to-text server is not reachable.</td></tr>
       </tbody>
     </table>
     <p class="hint">The code samples fill in this server's address and the key, voice and device last chosen on the <a href="/">test page</a> (the key shows as <code>&lt;your-key&gt;</code> when none is saved).</p>

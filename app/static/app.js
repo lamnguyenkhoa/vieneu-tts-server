@@ -325,8 +325,15 @@ async function useClip(blob) {
   updateCloneButton();
 }
 
+// The reading sentence is only for recording; an imported clip can say anything.
+function showScriptFor(source) {
+  $("scriptBlock").hidden = source === "file";
+  $("importNote").hidden = source !== "file";
+}
+
 $("cloneFile").addEventListener("change", () => {
   const f = $("cloneFile").files[0];
+  showScriptFor(f ? "file" : "record");
   if (!f) return;
   if (!$("cloneName").value.trim()) $("cloneName").value = f.name.replace(/\.[^.]+$/, "").slice(0, 40);
   useClip(f);
@@ -355,6 +362,7 @@ async function toggleRecord() {
     useClip(new Blob(parts, { type: parts[0]?.type || "audio/webm" }));
   };
   recorder.start();
+  showScriptFor("record");
   $("record").textContent = "Stop recording";
   $("record").classList.add("recording");
   updateCloneButton();
@@ -385,6 +393,7 @@ async function cloneVoice() {
     const v = await res.json();
     setCloneStatus(`Cloned "${v.name}" in ${Math.round(performance.now() - t0)} ms. It is now selected above.`);
     $("cloneName").value = $("cloneDesc").value = $("cloneFile").value = "";
+    showScriptFor("record");
     clip = null;
     $("clipPlayer").hidden = true;
     await loadVoices(v.id);

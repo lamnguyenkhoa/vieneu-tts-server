@@ -73,12 +73,15 @@
     <label for="cloneDesc">Description <span class="hint">(optional)</span></label>
     <input id="cloneDesc" maxlength="200" autocomplete="off">
 
-    <span class="field-label">Read this aloud when recording</span>
-    <div class="script">
-      <p id="cloneScript" lang="vi"></p>
-      <button id="nextScript" title="Show a different sentence">Another sentence</button>
+    <div id="scriptBlock">
+      <span class="field-label">Read this aloud when recording</span>
+      <div class="script">
+        <p id="cloneScript" lang="vi"></p>
+        <button id="nextScript" title="Show a different sentence">Another sentence</button>
+      </div>
+      <div class="hint">Use a normal speaking pace and voice, as if talking to someone, in a quiet room about 20 cm from the mic. Each sentence takes about 6–8 s and uses all six Vietnamese tones.</div>
     </div>
-    <div class="hint">Use a normal speaking pace and voice, as if talking to someone, in a quiet room about 20 cm from the mic. Each sentence takes about 6–8 s and uses all six Vietnamese tones.</div>
+    <div id="importNote" class="hint" hidden>Imported clips need no transcript: the model clones from the sound of the voice alone, so the clip can say anything. Use 3–8 s of clear speech from one person, with no music or other voices. To record with the mic instead, press <strong>Record</strong>.</div>
 
     <label for="cloneFile">Reference clip</label>
     <div class="actions clip-source">

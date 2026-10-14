@@ -150,3 +150,6 @@ textarea.short { min-height: 70px; }
 .manager-list .item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 a.button { display: inline-flex; align-items: center; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); text-decoration: none; }
 a.button:hover { background: var(--bg); }
+.docs ul { margin: 8px 0; padding-left: 20px; }
+.docs li { margin: 4px 0; }
+.docs td[colspan] { background: var(--bg); }

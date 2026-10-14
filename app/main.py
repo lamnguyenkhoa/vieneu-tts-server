@@ -686,16 +686,37 @@ def voices():
 
 
 def _read_clip(raw: bytes) -> tuple[np.ndarray, int]:
-    """Decode an uploaded clip (WAV/FLAC/OGG; compressed browser formats are converted to WAV client-side)."""
+    """Decode an uploaded clip: WAV/FLAC/OGG/MP3 directly, anything else (M4A, WebM...) through ffmpeg if it is installed."""
     import soundfile as sf
 
     try:
         wav, sr = sf.read(io.BytesIO(raw), dtype="float32", always_2d=False)
     except Exception:  # noqa: BLE001
-        raise HTTPException(400, "cannot read the audio file; send WAV, FLAC or OGG")
+        wav, sr = _ffmpeg_decode(raw)
     if getattr(wav, "ndim", 1) > 1:
         wav = wav.mean(axis=1)
     return np.asarray(wav, dtype=np.float32), int(sr)
+
+
+def _ffmpeg_decode(raw: bytes) -> tuple[np.ndarray, int]:
+    """Mono float32 at 48 kHz via ffmpeg; 400 when ffmpeg is missing or cannot read it."""
+    import subprocess
+
+    exe = autolora.ffmpeg_path()
+    if not exe:
+        raise HTTPException(400, "cannot read the audio file; send WAV, FLAC, OGG or MP3 (ffmpeg is not installed)")
+    # A temp file rather than stdin: containers like MP4/M4A need a seekable input.
+    fd, src = tempfile.mkstemp(suffix=".input")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        res = subprocess.run([exe, "-v", "error", "-nostdin", "-i", src, "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE),
+                              "-f", "f32le", "-"], capture_output=True, timeout=60)
+    finally:
+        Path(src).unlink(missing_ok=True)
+    if res.returncode != 0 or not res.stdout:
+        raise HTTPException(400, "cannot read the audio file")
+    return np.frombuffer(res.stdout, dtype=np.float32).copy(), SAMPLE_RATE
 
 
 def _voice_name(name: str) -> str:
