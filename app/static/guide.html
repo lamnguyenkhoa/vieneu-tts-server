@@ -15,6 +15,11 @@
   <section class="docs guide">
     <p>Base URL: <code class="base">{{BASE}}</code>. The caller must be able to reach this address. By default the server listens only on <code>127.0.0.1</code>. To accept requests from other machines, set <code>HOST=0.0.0.0</code> in <code>.env</code>, and also set <code>TTS_API_KEY</code>.</p>
 
+    <nav id="toc" class="toc" aria-label="Contents">
+      <span class="field-label">Contents</span>
+      <ol></ol>
+    </nav>
+
     <h3>Authentication</h3>
     <p>If the server has <code>TTS_API_KEY</code> set, send it on every request as <code>Authorization: Bearer &lt;key&gt;</code>. A missing or wrong key returns 401.</p>
 

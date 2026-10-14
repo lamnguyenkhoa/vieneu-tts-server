@@ -59,5 +59,47 @@ document.querySelectorAll(".code .copy").forEach((btn) => {
   });
 });
 
+// Table of contents from the section headings; each heading gets an id (kept if it has one) and a # link.
+function slug(text) {
+  return text.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function buildToc() {
+  const ol = document.querySelector("#toc ol");
+  const used = new Set();
+  document.querySelectorAll(".docs h3").forEach((h) => {
+    let id = h.id || slug(h.textContent) || "section";
+    for (let n = 2; used.has(id); n++) id = `${slug(h.textContent)}-${n}`;
+    used.add(id);
+    h.id = id;
+    const self = document.createElement("a");
+    self.className = "anchor";
+    self.href = `#${id}`;
+    self.textContent = "#";
+    self.setAttribute("aria-label", `Link to ${h.textContent}`);
+    h.append(" ", self);
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = `#${id}`;
+    a.innerHTML = h.innerHTML.replace(/\s*<a class="anchor"[\s\S]*$/, "");  // keeps <code> in titles
+    li.append(a);
+    ol.append(li);
+  });
+  const top = document.createElement("a");
+  top.href = "#";
+  top.className = "to-top";
+  top.textContent = "↑ Contents";
+  top.addEventListener("click", (e) => { e.preventDefault(); $toc().scrollIntoView({ behavior: "smooth" }); history.replaceState(null, "", location.pathname); });
+  document.body.append(top);
+  const onScroll = () => { top.classList.toggle("shown", $toc().getBoundingClientRect().bottom < 0); };
+  addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+  // the page loads before the ids exist, so jump to a #section link now
+  if (location.hash) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+}
+const $toc = () => document.getElementById("toc");
+
+buildToc();
 fillDocs();
 loadDefaults();
